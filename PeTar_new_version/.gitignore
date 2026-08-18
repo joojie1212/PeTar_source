@@ -1,0 +1,32 @@
+#emacs backup
+*~
+
+# object files
+*.o
+
+# lib files
+*.a
+*.so
+
+# build
+build/*
+
+# for install
+bin/*
+include/*
+
+config.log
+config.status
+autom4te.cache/
+__pycache__/
+*.pyc
+Makefile
+bse-interface/Makefile
+bse-interface/petar.bse
+bse-interface/petar.get.init.binary
+bse-interface/petar.mobse
+mobse-interface/Makefile
+mobse-interface/petar.mobse
+GPATH
+GRTAGS
+GTAGS

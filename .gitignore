@@ -1,0 +1,57 @@
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+*~
+
+# Nested repository metadata is not part of the source snapshot
+**/.git/
+
+# Compiled objects, libraries, and executables
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.mod
+*.smod
+*.gch
+*.pch
+
+# Python caches
+**/__pycache__/
+*.py[cod]
+
+# Generated build and runtime files
+PeTar_new_version/build/
+PeTar_new_version/bin/
+PeTar_new_version/include/
+PeTar_new_version/config.log
+PeTar_new_version/config.status
+PeTar_new_version/autom4te.cache/
+PeTar_new_version/Makefile
+PeTar_new_version/bse-interface/Makefile
+PeTar_new_version/bse-interface/petar.bse
+PeTar_new_version/bse-interface/petar.get.init.binary
+PeTar_new_version/bse-interface/petar.mobse
+PeTar_new_version/mobse-interface/Makefile
+PeTar_new_version/mobse-interface/petar.mobse
+
+# Local simulation results and temporary data
+**/result/
+**/results/
+**/tmp/
+**/cache/
+*.log
+
+# Untracked FDPS planetary-ring benchmark output
+FDPS/sample/c++/planetary_ring/tmp*.dat
+FDPS/sample/c++/planetary_ring/diff.dat
+FDPS/sample/c++/planetary_ring/ring_mono*.s
+
+# Locally built McLuster programs
+mcluster/mcluster
+mcluster/mcluster_sse

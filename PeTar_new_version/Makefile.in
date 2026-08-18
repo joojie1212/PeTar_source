@@ -1,0 +1,306 @@
+use_arch=@with_arch@
+use_simd=@use_simd@
+use_simd_64=@use_simd_64@
+use_mpi =@use_mpi@
+use_gpu_cuda=@use_cuda@
+use_omp = @use_omp@
+use_gperf=@use_gperf@
+use_quad = @use_quad@
+use_fdps_comm=@use_fdps_comm@
+use_bhmerger=@use_bhmerger@
+debug_mode=@with_debug@
+step_mode=@with_step_mode@
+se_mode=@with_interrupt@
+ext_mode=@with_external@
+tt_mode=@with_tidal_tensor@
+orb_mode=@with_orbit@
+
+CXXFLAGS=@CXXFLAGS@
+CFLAGS=@CFLAGS@
+BHMERGER_CFLAGS=@BHMERGER_CFLAGS@
+BHMERGER_LIBS=@BHMERGER_LIBS@
+
+TARGET=build/@PROG_NAME@ build/petar.hard.debug build/petar.format.transfer
+all: $(TARGET)
+
+
+ifeq ($(use_fdps_comm),yes)
+FDPSFLAGS = -D FDPS_COMM
+endif
+
+#MT_FLAGS += -D HARD_CM_KICK
+ifeq ($(use_quad),yes)
+MT_FLAGS += -D USE_QUAD
+endif
+MT_FLAGS += -D SOFT_PERT
+MT_FLAGS += -D AR_TTL
+MT_FLAGS += -D AR_SLOWDOWN_TREE
+#MT_FLAGS += -D AR_TTL_GT_BINARY_INNER
+#MT_FLAGS += -D FIX_CHANGEOVER
+MT_FLAGS += -D AR_SLOWDOWN_TIMESCALE
+#MT_FLAGS += -D AR_SLOWDOWN_MASSRATIO
+MT_FLAGS += -D CLUSTER_VELOCITY
+MT_FLAGS += -D HARD_CHECK_ENERGY
+MT_FLAGS += -D HARD_COUNT_NO_NEIGHBOR
+MT_FLAGS += -D ADJUST_GROUP_PRINT
+#MT_FLAGS += -D GROUP_DATA_WRITE_ARTIFICIAL
+#MT_FLAGS += -D DYNAMIC_MERGER_LESS_OUTPUT
+#MT_FLAGS += -D ONLY_SOFT
+#MT_FLAGS += -D INTEGRATED_CUTOFF_FUNCTION
+MT_FLAGS += -D SMOOTH_CM_USING_RECORES
+
+ifeq ($(tt_mode),3rd)
+MT_FLAGS += -D TIDAL_TENSOR_3RD
+endif
+
+ifeq ($(orb_mode),os)
+MT_FLAGS += -D ORBIT_SAMPLING
+endif
+
+SE_INSTALL:
+SE_CLEAN:
+ifneq ($(se_mode),off)
+MT_FLAGS += -D STELLAR_EVOLUTION
+BSE_FLAG=off
+ifeq ($(se_mode),mobse)
+MT_FLAGS += -D MOBSE -D BSE_BASE
+BSE_FLAG=on
+else  ifeq ($(se_mode),bse)
+MT_FLAGS += -D BSEBBF -D BSE_BASE 
+BSE_FLAG=on
+else ifeq ($(se_mode),bseEmp)
+MT_FLAGS += -D BSEEMP -D BSE_BASE
+BSE_FLAG=on
+endif
+ifeq ($(BSE_FLAG),on)
+FCLIBS = @FCLIBS@
+BSELIBFILES= bse-interface/libbse.a bse-interface/bse_interface.h
+BSELIBS = -L ./bse-interface -lbse $(FCLIBS)
+CXXLIBS += $(BSELIBS)
+LIBFILES+= $(BSELIBFILES)
+PETAR_INCLUDE += -I ./bse-interface
+CUDA_INCLUDE += -I ./bse-interface
+SE_INSTALL:
+	$(MAKE) -C bse-interface install
+SE_CLEAN:
+	$(MAKE) -C bse-interface clean
+bse-interface/libbse.a: bse-interface
+	$(MAKE) -C bse-interface 
+endif
+endif
+
+EXT_INSTALL:
+EXT_CLEAN:
+ifneq ($(ext_mode),off)
+MT_FLAGS += -D EXTERNAL_POT_IN_PTCL
+MT_FLAGS += -D RECORD_CM_IN_HEADER
+endif
+ifeq ($(ext_mode),galpy)
+GALPY_VERSION=@GALPY_VERSION@
+VERSION_MAX=$(shell printf '%s\n%s\n' "$(GALPY_VERSION)" "1.7.1" | sort --version-sort |tail -1)
+ifeq ($(VERSION_MAX), 1.7.1)
+GALPY_OPT= -D GALPY_VERSION_1_7_1
+else 
+VERSION_MAX=$(shell printf '%s\n%s\n' "$(GALPY_VERSION)" "1.7.9" | sort --version-sort |tail -1)
+ifeq ($(VERSION_MAX), 1.7.9)
+GALPY_OPT= -D GALPY_VERSION_1_7_9
+endif
+endif
+MT_FLAGS += -D GALPY $(GALPY_OPT)
+GALPYLIBS = -L ./galpy-interface -lgalpy @GSL_LIBS@
+CXXLIBS += $(GALPYLIBS)
+GALPYLIBFILES=galpy-interface/libgalpy.a galpy-interface/galpy_interface.h
+LIBFILES+= $(GALPYLIBFILES)
+GALPY_PATH=@GALPY_PATH@
+GALPY_INCLUDE_PATH= $(shell find $(GALPY_PATH) -type d )
+GALPY_INCLUDE = $(addprefix -I, $(GALPY_INCLUDE_PATH))
+PETAR_INCLUDE += -I ./galpy-interface $(GALPY_INCLUDE) @GSL_CFLAGS@
+galpy-interface/libgalpy.a: galpy-interface
+	$(MAKE) -C galpy-interface
+EXT_INSTALL:
+	$(MAKE) -C galpy-interface install
+EXT_CLEAN:
+	$(MAKE) -C galpy-interface clean
+endif
+
+ifeq ($(step_mode),kdkdk)
+MT_FLAGS += -D KDKDK_2ND
+else ifeq ($(step_mode),kdkdk4)
+MT_FLAGS += -D KDKDK_4TH
+endif
+
+OPTFLAGS = @OPTFLAGS@
+
+ifneq ($(debug_mode),no)
+
+DEBFLAGS += -D PETAR_DEBUG
+DEBFLAGS += -D AR_DEBUG
+DEBFLAGS += -D STABLE_CHECK_DEBUG
+DEBFLAGS += -D AR_WARN
+DEBFLAGS += -D CLUSTER_DEBUG
+DEBFLAGS += -D ARTIFICIAL_PARTICLE_DEBUG
+DEBFLAGS += -D HARD_DEBUG
+DEBFLAGS += -D NAN_CHECK_DEBUG
+
+#DEBFLAGS += -D AR_COLLECT_DS_MODIFY_INFO
+
+#DEBFLAGS += -D PARTICLE_SIMULATOR_DEBUG_PRINT
+#DEBFLAGS += -D HARD_INTERRUPT_PRINT
+#DEBFLAGS += -D AR_DEEP_DEBUG
+#DEBFLAGS += -D AR_DEBUG_PRINT
+#DEBFLAGS += -D CLUSTER_DEBUG_PRINT
+#DEBFLAGS += -D HARD_DEBUG_PRINT
+#DEBFLAGS += -D CORRECT_FORCE_DEBUG
+
+endif
+
+ifeq ($(debug_flag),g)
+OPTFLAGS += -D SANITY_CHECK_REALLOCATABLE_ARRAY
+endif
+
+DEBFLAGS += -D AR_DEBUG_DUMP
+DEBFLAGS += -D HARD_DUMP
+
+#-------------------------------------
+ifeq ($(use_mpi),yes) 
+FDPSFLAGS += -DPARTICLE_SIMULATOR_MPI_PARALLEL
+FDPSFLAGS += -DMPICH_IGNORE_CXX_SEEKC
+endif # mpi
+
+#-------------------------------------
+
+ifeq ($(use_omp),yes)
+CXXFLAGS += @OPENMP_CXXFLAGS@
+CXXFLAGS += -D PARTICLE_SIMULATOR_THREAD_PARALLEL
+endif # omp
+
+#---------------------------------------------
+ifeq ($(use_gpu_cuda),yes)
+CUDAFLAGS = -D PARTICLE_SIMULATOR_GPU_MULIT_WALK_INDEX
+FDPSFLAGS += $(CUDAFLAGS)
+NVCC = @NVCC@ @CUDAFLAGS@ -Xcompiler="$(OPTFLAGS) $(CXXFLAGS) $(CUDAFLAGS) $(MT_FLAGS)"
+CXXLIBS += @CUDALIBS@
+OBJS += build/force_gpu_cuda.o
+CXXFLAGS += -D USE_GPU
+CXXFLAGS += -D GPU_PROFILE
+endif # gpu cuda
+
+#-------------------------------------
+ifeq ($(use_arch),x86)
+CXXFLAGS += -DINTRINSIC_X86
+
+#-------------------------------------
+ifeq ($(use_simd),yes)
+CXXFLAGS += @SIMDFLAGS@
+CXXFLAGS += -D DIV_FIX
+CXXFLAGS += -D USE_SIMD
+ifeq ($(use_simd_64),yes)
+CXXFLAGS += -D P3T_64BIT
+endif # simd 64
+endif  # simd
+#-------------------------------------
+
+endif # x86
+
+#-------------------------------------
+ifeq ($(use_arch),fugaku)
+CXXFLAGS += -D USE_FUGAKU
+endif # fugaku
+
+#-------------------------------------
+ifeq ($(use_gperf),yes)
+CXXFLAGS += @GPERFFLAGS@
+CXXFLAGS += -D GPERF_PROFILE
+CXXLIBS += @GPERFLIBS@
+endif # gperf
+#-------------------------------------
+
+
+CXXFLAGS += -D PROFILE
+
+CXX=@CXX@
+CC=@CC@
+#CXXNOMPI=@CXXNOMPI@
+
+VPATH=./src ./build
+PETAR_INCLUDE += -I./src @PETAR_INCLUDE@
+CUDA_INCLUDE += -I./src @PETAR_INCLUDE@
+
+ifeq ($(use_bhmerger),yes)
+BHMERGER_OBJS = build/inspiralZJ.o
+OBJS += $(BHMERGER_OBJS)
+CXXLIBS += $(BHMERGER_LIBS)
+PETAR_INCLUDE += -I./bhmerger
+CXXFLAGS += -D BHMERGER_INTERFACE_LINKED
+endif
+
+SRC = main.cc ${shell ls ./src/*.hpp} 
+
+build:
+	[ -d build ] || mkdir build
+
+build/@PROG_NAME@:  $(SRC) $(OBJS) $(LIBFILES) |build
+	$(CXX) $(PETAR_INCLUDE) $(OPTFLAGS) $(CXXFLAGS) $(FDPSFLAGS) $(MT_FLAGS) $(DEBFLAGS) -o $@ $< $(OBJS) $(CXXLIBS)
+
+SIMD_DEBFLAGS += -DRSQRT_NR_EPJ_X2
+SIMD_DEBFLAGS += -DAVX_PRELOAD
+#SIMD_DEBFLAGS += -DRSQRT_NR_EPJ_X4
+#SIMD_DEBFLAGS += -DCALC_SP_64bit
+#SIMD_DEBFLAGS += -DRSQRT_NR_SPJ_X2
+#SIMD_DEBFLAGS += -DRSQRT_NR_SPJ_X4
+
+DEBUG_OPT_FLAGS = @DEBFLAGS@ -D SANITY_CHECK_REALLOCATABLE_ARRAY
+HARD_DEBFLAGS+= -D AR_DEBUG -D AR_DEBUG_DUMP -D AR_DEBUG_PRINT -D AR_WARN -D HARD_DEBUG -D HARD_DEBUG_PRINT -D ADJUST_GROUP_DEBUG -D HERMITE_DEBUG -D AR_COLLECT_DS_MODIFY_INFO -D STABLE_CHECK_DEBUG_PRINT -D ARTIFICIAL_PARTICLE_DEBUG -D ARTIFICIAL_PARTICLE_DEBUG_PRINT
+HARD_MT_FLAGS += -D AR_TTL -D AR_SLOWDOWN_TREE -D AR_SLOWDOWN_TIMESCALE -D HARD_CHECK_ENERGY 
+
+HARD_SRC= io.hpp ptcl.hpp particle_base.hpp hard_assert.hpp cluster_list.hpp hard.hpp hard_ptcl.hpp hermite_interaction.hpp hermite_information.hpp hermite_perturber.hpp ar_interaction.hpp ar_perturber.hpp search_group_candidate.hpp artificial_particles.hpp stability.hpp soft_ptcl.hpp static_variables.hpp tidal_tensor.hpp orbit_sampling.hpp pseudoparticle_multipole.hpp
+
+build/petar.format.transfer: format_transfer.cxx |build
+	$(CXX) $(PETAR_INCLUDE) $(OPTFLAGS) $(CXXFLAGS) $(MT_FLAGS) -o $@ $< $(CXXLIBS)
+
+build/petar.hard.debug: hard_debug.cxx $(HARD_SRC) $(BSELIBFILES) |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -D HARD_DEBUG_PRINT_TITLE -D STABLE_CHECK_DEBUG -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
+
+build/petar.hard.test: hard_test.cxx $(HARD_SRC) |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(HARD_MT_FLAGS) $(HARD_DEBFLAGS) -o $@ $< $(CXXLIBS)
+
+build/petar.simd.test: simd_test.cxx $(OBJS) |build
+	$(CXX) $(PETAR_INCLUDE) $(OPTFLAGS) $(CXXFLAGS) $(CUDAFLAGS) $(MT_FLAGS) $^ -o $@  $(CXXLIBS)
+
+build/petar.tt.test: tidal_tensor_test.cxx |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $< -o $@  $(CXXLIBS)
+
+build/petar.tide.test: tide_test.cxx two_body_tide.hpp |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $< -o $@  $(CXXLIBS)
+
+build/petar.io.test: io_test.cxx |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS)  $< -o $@  $(CXXLIBS)
+
+build/force_gpu_cuda.o: force_gpu_cuda.cu |build
+	$(NVCC) $(CUDA_INCLUDE) -c $< -o $@ 
+
+build/inspiralZJ.o: bhmerger/inspiralZJ.cpp bhmerger/inspiralZJ.hpp |build
+	$(CXX) $(CXXFLAGS) $(BHMERGER_CFLAGS) -c $< -o $@
+
+install_script_tool:
+	install -d @prefix@/bin/
+	install -m 755 tools/initdata.sh @prefix@/bin/petar.init
+	install -m 755 tools/find_dt.sh @prefix@/bin/petar.find.dt
+	install -m 755 tools/update_par.sh @prefix@/bin/petar.update.par
+	install -m 755 tools/data_clear.sh @prefix@/bin/petar.data.clear
+	install -m 755 tools/data_process.py @prefix@/bin/petar.data.process
+	install -m 755 tools/movie.py @prefix@/bin/petar.movie
+	install -m 755 tools/data_gether.sh @prefix@/bin/petar.data.gether
+	install -m 755 tools/get_object_snapshot.py @prefix@/bin/petar.get.object.snap
+	install -m 755 tools/format_transfer.py @prefix@/bin/petar.format.transfer.post
+	install -d @prefix@/include/
+	install -d @prefix@/include/petar
+	install -m 644 tools/analysis/*.py @prefix@/include/petar/
+
+install: $(TARGET) SE_INSTALL EXT_INSTALL install_script_tool
+	install -d @prefix@/bin/
+	install -m 755 $(TARGET) @prefix@/bin/
+	ln -sf @prefix@/bin/@PROG_NAME@ @prefix@/bin/petar
+
+clean: SE_CLEAN EXT_CLEAN
+	rm -f $(TARGET) build/*.o 
