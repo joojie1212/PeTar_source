@@ -1572,9 +1572,9 @@ public:
         rc[1] = _star2.rc;
         ospin[1] = _star2.ospin;
         epoch[1] = _star2.epoch;
-        std::cout << "beforeevo:"<<_ecc <<std::endl;
+        //std::cout << "beforeevo:"<<_ecc <<std::endl;
         evolv2_(kw, m0, mt, r, lum, mc, rc, menv, renv, ospin, epoch, tm, &tphys, &tphysf, &dtp, &z, zpars, &period_days, &_ecc, _bse_event.record[0], vkick);
-        std::cout << "afterevo:"<<_ecc <<std::endl;
+        //std::cout << "afterevo:"<<_ecc <<std::endl;
         _period = period_days/year_to_day/tscale;
 
         _star1.kw = kw[0];

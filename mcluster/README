@@ -241,7 +241,10 @@ Change the name of the output file(s).
 	  sampling, 4= L3 IMF from Maschberger 2012)
 
 Set f to 0 for a cluster consisting of single-mass stars. For f
-set to 1 the canonical two-part power-law Kroupa IMF is used from
+set to 0, use -m once to specify the mass of every star in solar
+masses, for example "mcluster -N 1000 -f 0 -m 30". If -m is not
+given, the single_mass default in main.c is used. For f set to 1
+the canonical two-part power-law Kroupa IMF is used from
 0.08 Msun to 100 Msun. Those default values can be changed within 
 the main routine of the code or with the -m option. The first -m
 will specify the lower mass limit, the second one will set the 
@@ -261,8 +264,9 @@ will set alpha, the second will set beta and the third is for mu.
 		   for parameters alpha, beta and mu of L3 IMF) 
       
        -m <value> (IMF mass limits for the IMF; for user defined IMF 
-       	  	  it may be used multiple times; always set limits
-		  from low mass to high mass [Msun])
+		  it may be used multiple times; always set limits
+		  from low mass to high mass [Msun]; for f=0, use once
+		  to set the mass of every star [Msun])
 
 Specify the mass limits and the power-law slopes of the IMF as follows
 
@@ -274,6 +278,16 @@ This would yield a Kroupa IMF ranging from 0.08 Msun to 150 Msun.
 
 This would give a L3 IMF from 0.01 to 100 Msun with alpha = 2.3,
 beta = 1.4 and mu = 0.2.
+
+
+       --blackhole (set every generated object to a black hole)
+
+By default this option is disabled and McLuster preserves the stellar
+types and radii produced by the selected mass function and SSE mode.
+When --blackhole is present, every generated object is assigned stellar
+type kw=14, radius 0.01 Rsun, zero spin and zero luminosity. For example:
+
+> mcluster_sse -N 1000 -f 0 -m 30 --blackhole -C 3 -o bh_cluster
 
 
        -B <number> (number of binary systems)                        

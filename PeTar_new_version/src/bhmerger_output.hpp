@@ -107,18 +107,16 @@ public:
     BHMergerOutput(): filename_(), precision_(17), enabled_(false) {}
 
     template <class Tparticle>
-    static ParticleState capture(const Tparticle& _particle,
-                                 const double* _pos_offset = nullptr,
-                                 const double* _vel_offset = nullptr) {
+    static ParticleState capture(const Tparticle& _particle) {
         ParticleState state;
         state.id = static_cast<long long>(_particle.id);
         state.mass = _particle.mass;
-        state.pos[0] = _particle.pos.x + (_pos_offset ? _pos_offset[0] : 0.0);
-        state.pos[1] = _particle.pos.y + (_pos_offset ? _pos_offset[1] : 0.0);
-        state.pos[2] = _particle.pos.z + (_pos_offset ? _pos_offset[2] : 0.0);
-        state.vel[0] = _particle.vel.x + (_vel_offset ? _vel_offset[0] : 0.0);
-        state.vel[1] = _particle.vel.y + (_vel_offset ? _vel_offset[1] : 0.0);
-        state.vel[2] = _particle.vel.z + (_vel_offset ? _vel_offset[2] : 0.0);
+        state.pos[0] = _particle.pos.x;
+        state.pos[1] = _particle.pos.y;
+        state.pos[2] = _particle.pos.z;
+        state.vel[0] = _particle.vel.x;
+        state.vel[1] = _particle.vel.y;
+        state.vel[2] = _particle.vel.z;
         state.spin[0] = _particle.spin.x;
         state.spin[1] = _particle.spin.y;
         state.spin[2] = _particle.spin.z;
@@ -144,16 +142,6 @@ public:
             header << std::setw(_width) << "binary.ecc"
                    << std::setw(_width) << "binary.semi";
             writeParticleTitle(header, "remnant", _width);
-            // The global frame used for the particle columns is reconstructed by
-            // adding these system-center offsets to the integration-frame data.
-            // Record the same offsets so merger positions can be interpreted even
-            // when the system center drifts with time.
-            header << std::setw(_width) << "center.pos.x"
-                   << std::setw(_width) << "center.pos.y"
-                   << std::setw(_width) << "center.pos.z"
-                   << std::setw(_width) << "center.vel.x"
-                   << std::setw(_width) << "center.vel.y"
-                   << std::setw(_width) << "center.vel.z";
             header << '\n';
             enabled_ = writeLocked(filename_, header.str(), true);
         }
@@ -174,8 +162,6 @@ public:
                const double _ecc,
                const double _semi,
                const ParticleState& _remnant,
-               const double* _center_pos,
-               const double* _center_vel,
                const int _width) {
         if (!enabled_) return;
 
@@ -189,17 +175,6 @@ public:
             line << std::setw(_width) << _ecc
                  << std::setw(_width) << _semi;
             writeParticle(line, _remnant, _width);
-            // _center_pos and _center_vel are the system-wide offsets already
-            // supplied to capture() at this merger event; no MPI-wide center
-            // recalculation is performed inside the asynchronous merger callback.
-            for (int k = 0; k < 3; ++k) {
-                line << std::setw(_width)
-                     << (_center_pos ? _center_pos[k] : 0.0);
-            }
-            for (int k = 0; k < 3; ++k) {
-                line << std::setw(_width)
-                     << (_center_vel ? _center_vel[k] : 0.0);
-            }
             line << '\n';
             writeLocked(filename_, line.str(), false);
         }

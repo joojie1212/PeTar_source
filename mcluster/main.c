@@ -80,8 +80,7 @@ int main (int argv, char **argc) {
 	int tf = 3;						//Tidal field: =0 no tidal field, =1 Near-field approximation, =2 point-mass galaxy, =3 Allen & Santillan (1991) MW potential (or Sverre's version of it)
 	double RG[3] = {8500.0,0.0,0.0}; //Initial Galactic coordinates of the cluster [pc]
 	double VG[3] = {0.0,220.0,0.0};  //Initial velocity of the cluster [km/s]
-	//ZHUJIE
-	//bool flag_BH=true;		  //Flag of BHs, if true, all stars will become BH.!!!!!
+	int blackhole = 0;				//Force every generated object to be a black hole; enabled by --blackhole
 	//Mass function parameters
 	int mfunc = 1;					//0 = single mass stars; 1 = use Kroupa (2001) mass function; 2 = use multi power law (based on mufu.c by L.Subr)
 	double single_mass = 30.0;		//Stellar mass in case of single-mass cluster!!!
@@ -187,8 +186,13 @@ int main (int argv, char **argc) {
 
 	//Command line input
 	int option;
-	while ((option = getopt(argv, argc, "N:M:P:W:R:r:c:g:S:D:T:Q:C:A:O:G:o:f:a:m:B:b:p:s:t:e:Z:X:x:V:u:h:?")) != -1) switch (option)
+	static struct option long_options[] = {
+		{"blackhole", no_argument, 0, 1000},
+		{0, 0, 0, 0}
+	};
+	while ((option = getopt_long(argv, argc, "N:M:P:W:R:r:c:g:S:D:T:Q:C:A:O:G:o:f:a:m:B:b:p:s:t:e:Z:X:x:V:u:h:?", long_options, NULL)) != -1) switch (option)
 	{
+		case 1000: blackhole = 1; break;
 		case 'N': N = atoi(optarg); Mcl = 0.0; break;
 		case 'M': Mcl = atof(optarg); N = 0; break;
 		case 'P':
@@ -347,6 +351,17 @@ int main (int argv, char **argc) {
 	if (S<0 || S>1) {
 	  printf("Bad value of S=%g\n",S);
 	  exit(1);
+	}
+	if (mfunc == 0 && mn > 1) {
+	  printf("\nError: equal-mass mode (-f 0) accepts exactly one stellar mass with -m\n");
+	  exit(1);
+	}
+	if (mfunc == 0 && mn == 1) {
+	  if (mlim[0] <= 0.0) {
+	    printf("\nError: stellar mass (-m) must be greater than zero, %g was given\n", mlim[0]);
+	    exit(1);
+	  }
+	  single_mass = mlim[0];
 	}
 
         if (mn-1 > 0) mup = mlim[mn-1];
@@ -978,25 +993,16 @@ int main (int argv, char **argc) {
 	//scale RS0 to nbody units for Nbody6
 	RS0 /= 1.0*rvir;
 	
-	//zhujie - 黑洞设置
-	
+	if (blackhole) {
 		printf("\n========== SETTING BLACK HOLES ==========\n");
-		printf("DEBUG: N = %d\n", N);
-		//fflush(stdout);
-		
 		for (i = 0; i < N; i++) {
-			//printf("Setting BH for star %d (mass = %.4f Msun)\n", i, star[i][7]);
-			//fflush(stdout);
-
-
 			star[i][8]  = 14;               /* kw = BH */
-			star[i][11] = 1e-2; /* 最小半径下限 1e-4 Rsun */
-			star[i][10] = 0.0; /* 可选：置自转为 0 */
-			star[i][12] = 0.0; /* 可选：置光度为 0 */
+			star[i][11] = 1e-2;             /* radius in Rsun */
+			star[i][10] = 0.0;              /* spin */
+			star[i][12] = 0.0;              /* luminosity */
 		}
 		printf("========== BLACK HOLES SET COMPLETE ==========\n");
-		//fflush(stdout);
-	
+	}
 
 	/*********************
 	 * Generate Binaries *
@@ -5284,7 +5290,7 @@ void info(char *output, int N, double Mcl, int profile, double W0, double S, dou
 }
 
 void help(double msort) {
-	printf("\n Usage: mcluster -[N|M|P|W|R|r|c|g|S|D|T|Q|C|A|O|G|o|f|a|m|B|b|p|s|t|e|Z|X|V|x|u|h|?]\n");
+	printf("\n Usage: mcluster [--blackhole] -[N|M|P|W|R|r|c|g|S|D|T|Q|C|A|O|G|o|f|a|m|B|b|p|s|t|e|Z|X|V|x|u|h|?]\n");
 	printf("                                                                     \n");
 	printf("       -N <number> (number of stars)                                 \n");
 	printf("       -M <value> (mass of cluster; specify either N or M)           \n");
@@ -5316,8 +5322,10 @@ void help(double msort) {
 	printf("       -a <value> (IMF slope; for user defined IMF, may be used      \n"); 
 	printf("                   multiple times, from low mass to high mass;       \n");
 	printf("                   for L3 IMF use three times for alpha, beta and mu)\n");
-	printf("       -m <value> (IMF mass limits, has to be used multiple times    \n");
-	printf("                 (at least twice), from low mass to high mass [Msun])\n");
+	printf("       -m <value> (stellar mass for equal-mass mode (-f 0);          \n");
+	printf("                   IMF mass limits for other modes [Msun])           \n");
+	printf("       --blackhole (set every generated object to a black hole;      \n");
+	printf("                    disabled by default)                            \n");
 	printf("       -B <number> (number of binary systems)                        \n");
 	printf("       -b <value> (binary fraction, specify either B or b)           \n");
 	printf("       -p <0|1|2|3> (binary pairing, 0= random, 1= ordered for M>%.1f Msun,\n",msort);
@@ -5341,11 +5349,11 @@ void help(double msort) {
 	printf("       -? (display this help)                                        \n");
 	printf("                                                                     \n");
 	printf(" Examples: mcluster -N 1000 -R 0.8 -P 1 -W 3.0 -f 1 -B 100 -o test1  \n");
+	printf("           mcluster -N 1000 -f 0 -m 30 -o equal_mass_30               \n");
+	printf("           mcluster -N 1000 -f 0 -m 30 --blackhole -o bh_cluster      \n");
 	printf("           mcluster -f 2 -m 0.08 -a -1.35 -m 0.5 -a -2.7 -m 100.0    \n");
 	printf("           mcluster -t 3 -X 8500 -X 0 -X 0 -V 0 -V 220 -V 0          \n");
 	printf("           mcluster -D 1.6 -Q 0.4 -P -1                              \n");
 	printf("                                                                     \n");
 
 }	
-
-

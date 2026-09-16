@@ -738,12 +738,8 @@ public:
       @param[in] _bin: binarytree to check iteratively
       \return 0: no modification; 2: modified; 3: destroyed
     */
-    int modifyAndInterruptIter(AR::InterruptBinary<PtclHard>& _bin_interrupt, AR::BinaryTree<PtclHard>& _bin
-#ifdef BHMERGER
-                               , const Float* _global_pos_offset,
-                               const Float* _global_vel_offset
-#endif
-        ) {
+    int modifyAndInterruptIter(AR::InterruptBinary<PtclHard>& _bin_interrupt,
+                               AR::BinaryTree<PtclHard>& _bin) {
         int modify_return = 0;
 #ifdef STELLAR_EVOLUTION
         int modify_branch[2];
@@ -751,11 +747,7 @@ public:
             for (int k=0; k<2; k++) {
                 if (_bin.isMemberTree(k)) {
                     modify_branch[k] = modifyAndInterruptIter(
-                        _bin_interrupt, *_bin.getMemberAsTree(k)
-#ifdef BHMERGER
-                        , _global_pos_offset, _global_vel_offset
-#endif
-                    );
+                        _bin_interrupt, *_bin.getMemberAsTree(k));
                     modify_return = std::max(modify_return, modify_branch[k]);
                 }
 #ifdef BSE_BASE
@@ -1157,11 +1149,9 @@ public:
                         // Snapshot both progenitors and their orbit before BSE and the
                         // remnant fitting library modify either particle.
                         const BHMergerOutput::ParticleState bhmerger_before1 =
-                            BHMergerOutput::capture(
-                                *p1, _global_pos_offset, _global_vel_offset);
+                            BHMergerOutput::capture(*p1);
                         const BHMergerOutput::ParticleState bhmerger_before2 =
-                            BHMergerOutput::capture(
-                                *p2, _global_pos_offset, _global_vel_offset);
+                            BHMergerOutput::capture(*p2);
                         const Float bhmerger_ecc_before = ecc;
                         const Float bhmerger_semi_before = semi;
                         const bool is_bh_bh_merger_before =
@@ -1206,15 +1196,7 @@ public:
                                 bhmerger_before2,
                                 bhmerger_ecc_before,
                                 bhmerger_semi_before,
-                                BHMergerOutput::capture(
-                                    remnant,
-                                    _global_pos_offset,
-                                    _global_vel_offset),
-                                // These offsets represent the system-center
-                                // position and velocity used to reconstruct the
-                                // global merger coordinates at this event time.
-                                _global_pos_offset,
-                                _global_vel_offset,
+                                BHMergerOutput::capture(remnant),
                                 WRITE_WIDTH);
                         }
 #endif

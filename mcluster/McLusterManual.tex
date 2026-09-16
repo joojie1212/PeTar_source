@@ -35,8 +35,9 @@ Option & Range & Meaning\\ \hline
       -f & 0/1/2/3/4 & IMF (no mass function/Kroupa IMF/user defined/Kroupa IMF + optimal sampling/L$_3$ IMF)\\
       -a & $a<0$ & IMF slope for a user defined IMF, may be used multiple times,\\
       			&  &  from low to high mass; can also be used to set $\alpha$, $\beta$ and $\mu$ of the L$_3$ IMF (in this order)\\       
-     -m & $m>0$ & IMF mass limits ($\msun$) for IMF, has to be used multiple times, \\
-     			& & from low to high mass\\
+     -m & $m>0$ & Stellar mass for equal-mass mode ($f=0$); otherwise IMF mass limits ($\msun$), \\
+			& & used multiple times from low to high mass\\
+      --blackhole & --- & Set every generated object to a black hole (disabled by default)\\
       -B & 0--$N/2$ & Number of binary systems (specify either $B$ or $b$)\\                        
       -b & 0.0--1.0 & Binary fraction (specify either $B$ or $b$)\\           
       -p & 0/1/2 & Binary pairing (random/ordered for $M > 5 \msun$/random but separate pairing for  $M > 5 \msun$)\\  
@@ -124,7 +125,8 @@ As mentioned above, the choice of the tidal field and of the cluster orbit may i
 \subsection*{Cluster mass and stellar mass function}
 You can either fix the total number of stars in your cluster (option \texttt{-N}) or you can set a desired total mass (option \texttt{-M}, in solar units). In the latter case, \textsc{McLuster} draws stars from the selected mass function until the desired mass is exceeded. The mass function of stars in the cluster can be defined to be one of the following four kinds (option \texttt{-f}).
 \begin{enumerate}
-\item All stars can have the same mass (option \texttt{-f0}). The mass of each star is by default assumed to be $1\msun$, which may be changed within the \texttt{main} routine (parameter \texttt{single\_mass}).
+\item All stars can have the same mass (option \texttt{-f0}). Specify the mass of each star in solar masses by using \texttt{-m} once, for example \texttt{-f0 -m30}. If \texttt{-m} is omitted, the \texttt{single\_mass} value in the main routine is used.
+\item The optional \texttt{--blackhole} flag sets every generated object to stellar type $kw=14$, radius $0.01\,R_\odot$, zero spin and zero luminosity. It is disabled by default.
 \item The canonical \citet{Kroupa01} initial mass function can be used with \texttt{-f1}. This IMF has a slope of $\alpha_1 = -1.3$ for stellar masses $m = 0.08 - 0.5 \msun$, and the Salpeter slope
 $\alpha_2 = -2.3$ for $m > 0.5 \msun$. The lower and upper IMF limit, \texttt{mlow} and \texttt{mup}, are by default $0.08\msun$ and $100\msun$, respectively, but these values may be changed in the \texttt{main} routine. 
 \item More sophisticated, multi-power-law IMFs can be set up with option \texttt{-f2}. Therefore, \textsc{McLuster} uses the routine \textsc{mufu} by Ladislav {\v S}ubr. This routine allows to define several mass limits and corresponding mass-function slopes between these limits. The limits and the slopes can be passed to \textsc{McLuster} with the options \texttt{-m} and \texttt{-a}, respectively. These options have to be used multiple times, where one more limit has to be passed to \textsc{McLuster} than number of slopes. For example, the Kroupa IMF with a steeper slope of $\alpha_3 = -2.7$ for stars more massive than $5\msun$ up to a maximum mass of $80\msun$ would be \texttt{-f2 -m0.08 -a-1.3 -m0.5 -a-2.3 -m5.0 -a-2.7 -m80.0}.
