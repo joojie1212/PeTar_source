@@ -30,6 +30,14 @@ concurrency bugs that could propagate invalid particle data or crash a run:
 - `Dynamic_merge` diagnostics and event records are serialized in an OpenMP
   critical section, preventing concurrent threads from corrupting the shared
   output stream.
+- For ordinary stars with BSE types `kw=1-13`, predicted `Contact` or
+  `Coalescence` events are deferred until the integrated instantaneous
+  separation satisfies `r <= R1 + R2`. Detached stars remain in the
+  integration and can respond to perturbations that prevent the predicted
+  future collision, recovering objects that were previously removed by
+  false-positive merger predictions based only on the osculating orbit or
+  pericentre. The same physical-contact requirement is used for bound and
+  unbound encounters, and stale delayed-collision flags are cleared.
 
 ## Upstream starting points
 

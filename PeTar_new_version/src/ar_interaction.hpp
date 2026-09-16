@@ -1094,10 +1094,45 @@ public:
                         abort();
                     }
 
-                    // check binary type and print event information
+                    // BSE is orbit averaged and may return Contact/Coalescence as
+                    // soon as the osculating pericentre intersects the stars.  For
+                    // ordinary stars this is only a prediction: perturbations before
+                    // the next pericentre can remove the collision.  Do not make that
+                    // prediction irreversible until the integrated positions overlap.
                     int binary_type_final=0;
                     int nmax = bin_event.getEventNMax();
                     int binary_type_init = bin_event.getType(bin_event.getEventIndexInit());
+                    bool bse_merger_event = false;
+                    for (int i=0; i<nmax; i++) {
+                        const int binary_type = bin_event.getType(i);
+                        if (binary_type>0) {
+                            binary_type_final = binary_type;
+                            if (bse_manager.isMerger(binary_type)) bse_merger_event = true;
+                        }
+                        else if (binary_type<0) break;
+                    }
+                    const bool ordinary_stars =
+                        p1_star_bk.kw>=1 && p1_star_bk.kw<=13
+                        && p2_star_bk.kw>=1 && p2_star_bk.kw<=13;
+                    const Float contact_radius = p1->radius + p2->radius;
+                    const bool instant_contact =
+                        _bin.r <= contact_radius;
+                    const bool defer_predicted_merger =
+                        ordinary_stars && bse_merger_event && !instant_contact;
+
+                    if (defer_predicted_merger) {
+                        // Restore both stars.  Force another check after physical time
+                        // advances; SDAR continues to integrate the encounter and any
+                        // intervening perturbation is retained.
+                        p1->star = p1_star_bk;
+                        p2->star = p2_star_bk;
+                        p1->time_interrupt = _bin_interrupt.time_now;
+                        p2->time_interrupt = _bin_interrupt.time_now;
+                        event_flag = 0;
+                    }
+
+                    // check binary type and print event information
+                    if (!defer_predicted_merger) {
                     for (int i=0; i<nmax; i++) {
                         int binary_type = bin_event.getType(i);
                         if (binary_type>0) {
@@ -1140,6 +1175,7 @@ public:
                     semi = COMM::Binary::periodToSemi(period, mtot, gravitational_constant);
                     //std::cout<<"postProcess1"<<std::endl;
                     postProcess(out, pos_cm, vel_cm, semi, ecc, binary_type_final);
+                    }
                 }
             }
 #endif // BSE_BASE
@@ -1333,6 +1369,13 @@ public:
 
                 };
 
+                // BSE may have changed masses, positions and velocities. Collision
+                // and tide decisions must use the same instantaneous orbit.
+                _bin.calcOrbit(gravitational_constant);
+                drdv = 0.0;
+                for (int k=0; k<3; k++)
+                    drdv += (p2->pos[k]-p1->pos[k])*(p2->vel[k]-p1->vel[k]);
+
                 // delayed merger
                 if (p1->getBinaryInterruptState()== BinaryInterruptState::collision &&
                     p2->getBinaryInterruptState()== BinaryInterruptState::collision &&
@@ -1342,7 +1385,16 @@ public:
                                    p1->pos[1] - p2->pos[1],
                                    p1->pos[2] - p2->pos[2]};
                     Float dr2  = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
-                    merge(std::sqrt(dr2), 0.0, 1.0);
+                    const Float radius = p1->radius + p2->radius;
+                    if (dr2 <= radius*radius) {
+                        merge(std::sqrt(dr2), 0.0, 1.0);
+                    }
+                    else {
+                        // A stored pericentre prediction is no longer sufficient to
+                        // merge.  Clear it and let the integrated positions decide.
+                        p1->setBinaryInterruptState(BinaryInterruptState::none);
+                        p2->setBinaryInterruptState(BinaryInterruptState::none);
+                    }
                 }
                 else {
                     // check merger
@@ -1385,12 +1437,17 @@ public:
                         if (dr2<radius*radius) merge(std::sqrt(dr2), 0.0, 1.0);
                     }
 #else
-                    // in bse case, handle binary merger in bse, only check hyperbolic merger
-                    if (_bin.semi<0.0) {
-                        Float dr[3] = {p1->pos[0] - p2->pos[0],
-                                       p1->pos[1] - p2->pos[1],
-                                       p1->pos[2] - p2->pos[2]};
-                        Float dr2  = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
+                    Float dr[3] = {p1->pos[0] - p2->pos[0],
+                                   p1->pos[1] - p2->pos[1],
+                                   p1->pos[2] - p2->pos[2]};
+                    Float dr2  = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
+                    const bool ordinary_stars =
+                        p1->star.kw>=1 && p1->star.kw<=13
+                        && p2->star.kw>=1 && p2->star.kw<=13;
+                    // Ordinary stellar mergers require instantaneous surface
+                    // overlap, for bound and unbound encounters alike.  Preserve the
+                    // historical hyperbolic check for other object combinations.
+                    if (ordinary_stars || _bin.semi<0.0) {
                         if (dr2<radius*radius) merge(std::sqrt(dr2), 0.0, 1.0);
                     }
 #endif
@@ -1530,7 +1587,17 @@ public:
                             else if (std::min(p1->star.kw, p2->star.kw)<13) {
                                 poly_type1 = (p1->star.kw<=2) ? 3.0 : 1.5;
                                 poly_type2 = (p2->star.kw<=2) ? 3.0 : 1.5;
-                                Etid = tide.evolveOrbitDynamicalTide(_bin, rad1, rad2, poly_type1, poly_type2);
+                                const Float peri = _bin.semi*(1.0-_bin.ecc);
+                                // This branch is reached on the outgoing leg. A
+                                // step can cross stellar contact without sampling
+                                // overlapping positions; bound collisions are also
+                                // absent from the hyperbolic-only check above.
+                                // Resolve that encounter before applying a model
+                                // which requires a detached pericentre.
+                                if (!(std::isfinite(peri) && peri >= 0.0
+                                      && peri <= rad1+rad2)) {
+                                    Etid = tide.evolveOrbitDynamicalTide(_bin, rad1, rad2, poly_type1, poly_type2);
+                                }
                                 change_flag = (Etid>0);
                                 // for slowdown case, repeating tide effect based on slowdown factor
                                 Float sd_factor_ext = _bin.slowdown.getSlowDownFactor() - 1.5;
