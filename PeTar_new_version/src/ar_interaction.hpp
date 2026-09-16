@@ -985,10 +985,12 @@ public:
                         // in case of disruption but no kick
                         else {
                             ASSERT(ecc>=1.0);
-                            // BSE supplies period as a positive magnitude even for a
-                            // disrupted system; use a negative semi-major axis for the
-                            // hyperbolic reconstruction.
-                            semi = -std::fabs(semi);
+                            // BSE sets period to zero for a disrupted binary, so the
+                            // period-to-semi conversion above also yields zero. Preserve
+                            // the pre-BSE orbital-energy scale and change only its sign
+                            // for the hyperbolic reconstruction, as in the original
+                            // disruption handling.
+                            semi = -std::fabs(_bin.semi);
                             rebuildOrbitFromBSE();
                         }
                     }
