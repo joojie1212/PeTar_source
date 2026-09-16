@@ -15,6 +15,22 @@ runtime results, caches, and machine-local editor settings.
 PeTar's default configure paths expect `FDPS` and `SDAR` beside the PeTar
 directory, matching this layout.
 
+## Local stability fixes
+
+The current PeTar source includes fixes for three state-consistency and
+concurrency bugs that could propagate invalid particle data or crash a run:
+
+- Hyperbolic gravitational-wave evolution now computes the new eccentricity
+  from the newly updated semi-major axis instead of mixing the old and new
+  orbital states.
+- BSE orbital updates now rebuild particles from the new masses, semi-major
+  axis, and eccentricity, then recalculate all cached binary quantities from
+  that rebuilt state. Invalid or non-finite post-BSE orbits are detected and
+  dumped immediately instead of being propagated into later integration.
+- `Dynamic_merge` diagnostics and event records are serialized in an OpenMP
+  critical section, preventing concurrent threads from corrupting the shared
+  output stream.
+
 ## Upstream starting points
 
 The working-tree snapshot was based on these commits before including local

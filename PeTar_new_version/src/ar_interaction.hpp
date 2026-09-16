@@ -912,46 +912,84 @@ public:
                     }
 
                     if (!kick_flag && !mass_zero_flag) {
-                        // case for elliptic case
-                        if (ecc>=0.0&&ecc<=1.0) {
-                            // obtain full orbital parameters
-                            //_bin.calcOrbit(gravitational_constant);
-                            // update new period, ecc
-//#pragma omp critical
-//                            std::cerr<<"Event: "<<event_flag<<" "<<_bin.period<<" "<<period<<" "<<_bin.ecc<<" "<<ecc<<std::endl;
+                        auto rebuildOrbitFromBSE = [&]() {
+                            const bool finite_input =
+                                std::isfinite(semi) && std::isfinite(ecc)
+                                && std::isfinite(p1->mass) && std::isfinite(p2->mass)
+                                && std::isfinite(_bin.ecca);
+                            const bool valid_conic =
+                                (semi > 0.0 && ecc >= 0.0 && ecc < 1.0)
+                                || (semi < 0.0 && ecc > 1.0);
+                            if (!finite_input || !valid_conic
+                                || p1->mass <= 0.0 || p2->mass <= 0.0) {
+                                std::cerr << "Invalid post-BSE orbit: ID="
+                                          << p1->id << " " << p2->id
+                                          << " m=" << p1->mass << " " << p2->mass
+                                          << " semi=" << semi << " ecc=" << ecc
+                                          << " ecca(old)=" << _bin.ecca << std::endl;
+                                DATADUMP("dump_invalid_post_bse_orbit");
+                                abort();
+                            }
+
+                            // BSE returns new masses and orbit-averaged semi/ecc, but
+                            // does not return an orbital phase. Keep the pre-BSE
+                            // eccentric anomaly for the instantaneous reconstruction,
+                            // then derive every cached orbital quantity from the newly
+                            // reconstructed particle state. This prevents new semi/ecc
+                            // from being mixed with stale period, r, t_peri or am.
+                            const Float phase_ecca = _bin.ecca;
                             _bin.semi = semi;
-                            ASSERT(_bin.semi>0);
                             _bin.ecc = ecc;
                             _bin.m1 = p1->mass;
                             _bin.m2 = p2->mass;
-                            //if (((ecc-ecc_bk)/(1-ecc)>0.01||(period-period_bk)/period>1e-2)) {
-                            // kepler orbit to particles using the same ecc anomaly
+                            _bin.ecca = phase_ecca;
                             _bin.calcParticles(gravitational_constant);
-                            p1->pos += _bin.pos;
-                            p2->pos += _bin.pos;
-                            p1->vel += _bin.vel;
-                            p2->vel += _bin.vel;
-                            //}
+                            for (int k=0; k<3; k++) {
+                                p1->pos[k] += pos_cm[k];
+                                p2->pos[k] += pos_cm[k];
+                                p1->vel[k] += vel_cm[k];
+                                p2->vel[k] += vel_cm[k];
+                            }
+
+                            // Synchronize all derived Binary fields with the updated
+                            // particle state, including period, r, ecca, t_peri and am.
+                            _bin.calcOrbit(gravitational_constant);
+                            const bool finite_output =
+                                std::isfinite(_bin.semi)
+                                && std::isfinite(_bin.ecc)
+                                && std::isfinite(_bin.period)
+                                && std::isfinite(_bin.r)
+                                && std::isfinite(_bin.ecca)
+                                && std::isfinite(_bin.t_peri)
+                                && std::isfinite(_bin.am.x)
+                                && std::isfinite(_bin.am.y)
+                                && std::isfinite(_bin.am.z);
+                            if (!finite_output) {
+                                std::cerr << "Non-finite reconstructed post-BSE orbit: ID="
+                                          << p1->id << " " << p2->id
+                                          << " semi=" << _bin.semi
+                                          << " ecc=" << _bin.ecc
+                                          << " period=" << _bin.period
+                                          << " r=" << _bin.r
+                                          << " ecca=" << _bin.ecca
+                                          << " t_peri=" << _bin.t_peri << std::endl;
+                                DATADUMP("dump_nonfinite_post_bse_orbit");
+                                abort();
+                            }
+                        };
+
+                        // case for elliptic case
+                        if (ecc>=0.0&&ecc<=1.0) {
+                            rebuildOrbitFromBSE();
                         }
                         // in case of disruption but no kick
                         else {
-                            // obtain full orbital parameters
-                            // _bin.calcOrbit(gravitational_constant);
-                            // assume energy no change
-                            if(_bin.semi>0) _bin.semi = -_bin.semi;
-                            _bin.ecc = ecc;
-                            _bin.m1 = p1->mass;
-                            _bin.m2 = p2->mass;
-                            //std::cout << ecc <<std::endl;
                             ASSERT(ecc>=1.0);
-                            // kepler orbit to particles using the same ecc anomaly
-                            //if ((ecc-ecc_bk)/ecc>1e-6) {
-                            _bin.calcParticles(gravitational_constant);
-                            p1->pos += _bin.pos;
-                            p2->pos += _bin.pos;
-                            p1->vel += _bin.vel;
-                            p2->vel += _bin.vel;
-                            //}
+                            // BSE supplies period as a positive magnitude even for a
+                            // disrupted system; use a negative semi-major axis for the
+                            // hyperbolic reconstruction.
+                            semi = -std::fabs(semi);
+                            rebuildOrbitFromBSE();
                         }
                     }
                 }
