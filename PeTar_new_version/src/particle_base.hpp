@@ -9,7 +9,11 @@
 #endif
 
 #ifdef BSE_BASE
-enum class BinaryInterruptState:int {none = 0, form = 1, type_change = 2, start_roche = 3, end_roche = 4, contact = 5, start_symbiotic = 6, end_symbiotic = 7, common_envelope = 8 , giant = 9, collision = 10, blue_straggler = 11, no_remain = 12, disrupt = 13, tide = 14};
+enum class BinaryInterruptState:int {none = 0, form = 1, type_change = 2, start_roche = 3, end_roche = 4, contact = 5, start_symbiotic = 6, end_symbiotic = 7, common_envelope = 8 , giant = 9, collision = 10, blue_straggler = 11, no_remain = 12, disrupt = 13, tide = 14
+#ifdef FROZEN_BINARY
+                                    , frozen = 15
+#endif
+};
 #else
 enum class BinaryInterruptState:int {none = 0, form = 1, exchange = 2, collision = 3};
 #endif
@@ -58,6 +62,17 @@ public:
     PS::S64 getBinaryPairID() const {
         return (binary_state>>BINARY_STATE_ID_SHIFT);
     }
+
+#ifdef FROZEN_BINARY
+    void setBinaryFrozen(const bool _frozen) {
+        if (_frozen) setBinaryInterruptState(BinaryInterruptState::frozen);
+        else if (isBinaryFrozen()) setBinaryInterruptState(BinaryInterruptState::none);
+    }
+
+    bool isBinaryFrozen() const {
+        return getBinaryInterruptState()==BinaryInterruptState::frozen;
+    }
+#endif
 
     // -------------------------
 

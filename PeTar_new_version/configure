@@ -649,6 +649,7 @@ with_interrupt
 with_step_mode
 with_debug
 use_bhmerger
+use_frozen_binary
 use_gperf
 use_omp
 use_cuda
@@ -744,6 +745,7 @@ with_galpy_prefix
 with_step_mode
 with_interrupt
 enable_bhmerger
+enable_frozen_binary
 with_external
 with_tidal_tensor
 with_orbit
@@ -1381,6 +1383,8 @@ Optional Features:
                           long-distant tree force
   --enable-gperf          enable gperftools for profiling
   --enable-bhmerger       enable black hole merger module
+  --enable-frozen-binary  enable reversible frozen state for stable hard
+                          binaries
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -5191,6 +5195,18 @@ if test x"$use_bhmerger" != xno; then :
        BHMERGER_LIBS="$PYTHON_LIBS"
        OPTFLAGS=$OPTFLAGS" -DBHMERGER"
        DEBFLAGS=$DEBFLAGS" -DBHMERGER"
+fi
+
+# Check whether --enable-frozen-binary was given.
+if test "${enable_frozen_binary+set}" = set; then :
+  enableval=$enable_frozen_binary; use_frozen_binary=yes
+else
+  use_frozen_binary=no
+fi
+
+if test x"$use_frozen_binary" != xno; then :
+  OPTFLAGS=$OPTFLAGS" -DFROZEN_BINARY"
+  DEBFLAGS=$DEBFLAGS" -DFROZEN_BINARY"
 fi
 # external potential
 ac_ext=c

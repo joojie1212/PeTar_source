@@ -20,3 +20,8 @@ particles. The tangency case uses the reconstructed pericentre; the cases
 The tide model is skipped when its predicted pericentre is inside the stellar
 surfaces, but that prediction alone no longer causes an irreversible merger.
 These are controlled local encounters, not a replay of the original MPI job.
+
+The zhujie tide-scope regression also verifies that the extra dynamical-tide
+prescription leaves an existing bound orbit unchanged, still captures an
+initially unbound encounter, and does not apply further losses to the newly
+captured binary. Bound-binary tidal evolution is handled by BSE.

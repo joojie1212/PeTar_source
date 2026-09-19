@@ -51,8 +51,31 @@ int checkEncounter(double ecc, double factor, double phase) {
     return merged==expected?0:2;
 }
 
+// zhujie: bound orbits must not receive extra dynamical-tide losses, while
+// an initially unbound encounter must still be able to form a bound binary.
+int checkTideScope() {
+    TwoBodyTide tide;
+    tide.gravitational_constant=1;
+    PtclHard p[2];
+    AR::BinaryTree<PtclHard> bin;
+    bin.setMembers(p,p+1,0,1);
+    bin.m1=bin.m2=1;bin.mass=2;
+    bin.semi=6;bin.ecc=0.5;
+    if (tide.evolveOrbitDynamicalTide(bin,1.,1.,3.,3.)!=0
+        || bin.semi!=6 || bin.ecc!=0.5) return 1;
+    bin.ecc=1.00001;bin.semi=3/(1-bin.ecc);
+    const double loss=tide.evolveOrbitDynamicalTide(bin,1.,1.,3.,3.);
+    if (!(loss>0 && bin.semi>0 && bin.ecc>=0 && bin.ecc<1)) return 2;
+    const double a=bin.semi,e=bin.ecc;
+    if (tide.evolveOrbitDynamicalTide(bin,1.,1.,3.,3.)!=0
+        || bin.semi!=a || bin.ecc!=e) return 3;
+    std::cout<<"zhujie tide scope: bound skipped, capture retained, post-capture skipped\n";
+    return 0;
+}
+
 int main() {
     int failures=0;
+    failures += (checkTideScope()!=0);
     for (double ecc: {0.5, 1.5}) {
         for (double factor: {0.5, 1.0-1e-12, 1.0, 1.0+1e-12, 10.0})
             failures += (checkEncounter(ecc, factor, 2.0)!=0);

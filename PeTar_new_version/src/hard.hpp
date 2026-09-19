@@ -185,6 +185,9 @@ public:
 
     bool use_sym_int;  ///> use AR integrator flag
     bool is_initialized; ///> indicator whether initialization is done
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+    bool frozen_kepler; ///> analytically advance an eligible isolated frozen binary
+#endif
 
 #ifdef HARD_CHECK_ENERGY
     HardEnergy energy;
@@ -202,11 +205,67 @@ public:
 #ifdef HARD_COUNT_NO_NEIGHBOR
                       table_neighbor_exist(), n_neighbor_zero(0),
 #endif
-                      use_sym_int(true), is_initialized(false) {
+                      use_sym_int(true), is_initialized(false)
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+                      , frozen_kepler(false)
+#endif
+                      {
 #ifdef HARD_CHECK_ENERGY
                           energy.clear();
 #endif
                       }
+
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+    //! Advance an elliptic two-body orbit without taking SDAR substeps.
+    static void advanceFrozenKeplerOrbit(AR::BinaryTree<PtclHard>& _bin,
+                                         const PS::F64 _dt,
+                                         const PS::F64 _gravitational_constant) {
+        ASSERT(_bin.semi>0.0 && _bin.ecc>=0.0 && _bin.ecc<1.0);
+        const PS::F64 two_pi = 8.0*std::atan(1.0);
+        const PS::F64 mean_motion = std::sqrt(
+            _gravitational_constant*(_bin.m1+_bin.m2)
+            /(_bin.semi*_bin.semi*_bin.semi));
+        PS::F64 mean_anomaly = _bin.ecca-_bin.ecc*std::sin(_bin.ecca)
+                             + mean_motion*_dt;
+        mean_anomaly = std::remainder(mean_anomaly, two_pi);
+
+        PS::F64 ecca = (_bin.ecc<0.8) ? mean_anomaly
+                                      : std::copysign(0.5*two_pi, mean_anomaly);
+        for (int i=0; i<32; i++) {
+            const PS::F64 f = ecca-_bin.ecc*std::sin(ecca)-mean_anomaly;
+            const PS::F64 de = f/(1.0-_bin.ecc*std::cos(ecca));
+            ecca -= de;
+            if (std::fabs(de)<1.0e-14) break;
+        }
+        _bin.ecca = ecca;
+        _bin.r = _bin.semi*(1.0-_bin.ecc*std::cos(ecca));
+        _bin.t_peri = mean_anomaly/mean_motion;
+        _bin.calcParticles(_gravitational_constant);
+    }
+
+    //! Put frozen leaf binaries on SDAR's largest perturbation-safe slowdown.
+    /*! This is used for inner binaries of hierarchical groups.  The outer
+        hierarchy remains integrated by SDAR; only the already frozen leaf's
+        resolved orbital frequency is reduced to the timescale allowed by
+        SDAR's own perturbation limiter. */
+    template <class TARIntegrator>
+    static void maximizeFrozenInnerSlowDown(TARIntegrator& _integrator) {
+        auto& binarytree = _integrator.info.binarytree;
+        const int n_binary = binarytree.getSize();
+        for (int i=0; i<n_binary; i++) {
+            auto& bin = binarytree[i];
+            if (bin.getMemberN()!=2) continue;
+            auto* p1 = bin.getMember(0);
+            auto* p2 = bin.getMember(1);
+            if (!(p1->isBinaryFrozen() && p2->isBinaryFrozen()
+                  && p1->getBinaryPairID()==p2->id
+                  && p2->getBinaryPairID()==p1->id)) continue;
+            auto& slowdown = bin.slowdown;
+            slowdown.initialSlowDownReference(1.0e100,
+                                               slowdown.getTimescaleMax());
+        }
+    }
+#endif
 
     //! check parameters
     bool checkParams() {
@@ -376,6 +435,26 @@ public:
             sym_int.initialIntegration(0.0);
             sym_int.info.time_offset = time_origin;
             sym_int.info.calcDsAndStepOption(ar_manager.step.getOrder(),  ar_manager.interaction.gravitational_constant, ar_manager.ds_scale); 
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+            maximizeFrozenInnerSlowDown(sym_int);
+#endif
+
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+            // A frozen isolated binary has already passed the binding-energy,
+            // collision-distance, next-BSE-time and perturbation checks.  Keep its
+            // centre of mass in the normal hard/soft flow, but advance the internal
+            // orbit analytically instead of resolving every revolution with SDAR.
+            if (n_members==2) {
+                auto& bin_root = sym_int.info.getBinaryTreeRoot();
+                auto* p1 = bin_root.getMember(0);
+                auto* p2 = bin_root.getMember(1);
+                const PS::F64 next_bse_check = std::min(p1->time_interrupt,
+                                                        p2->time_interrupt);
+                frozen_kepler = ar_manager.interaction.isFrozenPair(*p1, *p2)
+                    && ar_manager.interaction.isBinaryFrozenEligible(
+                        bin_root, *p1, *p2, time_origin, next_bse_check);
+            }
+#endif
 
             // calculate c.m. changeover
             auto& pcm = sym_int.particles.cm;
@@ -492,6 +571,10 @@ public:
 
             // initialization 
             h4_int.initialIntegration(); // get neighbors and min particles
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+            for (PS::S32 i=0; i<_n_group; i++)
+                maximizeFrozenInnerSlowDown(h4_int.groups[i]);
+#endif
 
 #ifdef HARD_DEBUG_PRINT
             // AR inner slowdown number
@@ -583,6 +666,12 @@ public:
 #endif
         // integration
         if (use_sym_int) {
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+            if (frozen_kepler) {
+                interrupt_binary.clear();
+            }
+            else
+#endif
             interrupt_binary = sym_int.integrateToTime(_time_end);
 #ifdef ADJUST_GROUP_PRINT
             if (manager->h4_manager.adjust_group_write_flag) {
@@ -839,6 +928,12 @@ public:
 #endif
         if (use_sym_int) {
             auto& pcm = sym_int.particles.cm;
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+            if (frozen_kepler) {
+                advanceFrozenKeplerOrbit(sym_int.info.getBinaryTreeRoot(), _time_end,
+                                         manager->ar_manager.interaction.gravitational_constant);
+            }
+#endif
             pcm.pos += pcm.vel * _time_end;
 
             // update rsearch
@@ -1173,6 +1268,9 @@ public:
         ptcl_origin = NULL;
         interrupt_binary.clear();
         is_initialized = false;
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+        frozen_kepler = false;
+#endif
 
 #ifdef PROFILE
         ARC_substep_sum = 0;
@@ -3390,4 +3488,3 @@ public:
     }
 
 };
-

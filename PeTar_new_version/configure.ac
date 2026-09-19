@@ -377,6 +377,17 @@ AS_IF([test x"$use_bhmerger" != xno],
        BHMERGER_LIBS="$PYTHON_LIBS"
        OPTFLAGS=$OPTFLAGS" -DBHMERGER"
        DEBFLAGS=$DEBFLAGS" -DBHMERGER"])
+
+# Optional suppression of unnecessary BSE calls for dynamically safe hard binaries.
+AC_ARG_ENABLE([frozen-binary],
+              [AS_HELP_STRING([--enable-frozen-binary],
+                              [enable reversible frozen state for stable hard binaries])],
+              [use_frozen_binary=yes],
+              [use_frozen_binary=no])
+
+AS_IF([test x"$use_frozen_binary" != xno],
+      [OPTFLAGS=$OPTFLAGS" -DFROZEN_BINARY"
+       DEBFLAGS=$DEBFLAGS" -DFROZEN_BINARY"])
 # external potential
 AC_ARG_WITH([external],
 	    [AS_HELP_STRING([--with-external],
@@ -486,6 +497,7 @@ AC_SUBST([use_omp])
 AC_SUBST([use_gperf])
 #zhujie
 AC_SUBST([use_bhmerger])
+AC_SUBST([use_frozen_binary])
 
 AC_SUBST([with_debug])
 AC_SUBST([with_step_mode])

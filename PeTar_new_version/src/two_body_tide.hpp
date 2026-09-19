@@ -102,8 +102,9 @@ public:
     template <class TBinary>
     Float evolveOrbitDynamicalTide(TBinary& _bin, const Float& rad1, const Float& rad2, const Float& poly_type1, const Float& poly_type2) {
         ASSERT(_bin.getMemberN()==2);
-        //ASSERT(_bin.semi<0);
-        //ASSERT(_bin.ecc>1);
+        // zhujie: reserve this energy-loss prescription for unbound encounters.
+        // Bound binaries use BSE tides, including after a successful capture.
+        if (_bin.semi >= 0.0) return 0.0;
 
         ASSERT(_bin.m1>0);
         ASSERT(_bin.m2>0);

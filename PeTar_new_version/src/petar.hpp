@@ -135,6 +135,13 @@ public:
     IOParams<PS::S64> stellar_evolution_option;
 #endif
     IOParams<PS::S64> interrupt_detection_option;
+#ifdef FROZEN_BINARY
+    IOParams<PS::F64> frozen_energy_factor;
+    IOParams<PS::F64> frozen_time_factor;
+    IOParams<PS::F64> frozen_perturbation_limit;
+    IOParams<PS::F64> frozen_radius_factor;
+    IOParams<PS::F64> frozen_ecc_limit;
+#endif
 #ifdef ADJUST_GROUP_PRINT
     IOParams<PS::S64> adjust_group_write_option;
 #endif
@@ -204,6 +211,13 @@ public:
 #endif
 #else
                      interrupt_detection_option(input_par_store, 0, "detect-interrupt", "Modify orbits of AR groups based on the interruption function: 0: turn off; 1: modify inside AR integration and accumulate energy change; 2. modify and also interrupt the hard drift"),
+#endif
+#ifdef FROZEN_BINARY
+                     frozen_energy_factor(input_par_store, 10.0, "frozen-energy-factor", "Minimum binary binding energy in units of the mean cluster kinetic energy"),
+                     frozen_time_factor(input_par_store, 100.0, "frozen-time-factor", "Minimum time to the next BSE check in units of the tree timestep"),
+                     frozen_perturbation_limit(input_par_store, 1.0e-6, "frozen-perturbation-limit", "Maximum external-to-internal force ratio for a frozen binary"),
+                     frozen_radius_factor(input_par_store, 3.0, "frozen-radius-factor", "Minimum separation and periapsis in units of the summed stellar radii"),
+                     frozen_ecc_limit(input_par_store, 0.1, "frozen-ecc-limit", "Exclusive upper eccentricity limit for frozen binaries"),
 #endif
 #ifdef ADJUST_GROUP_PRINT
                      adjust_group_write_option(input_par_store, 1, "write-group-info", "Print new and end of groups: 0: no print; 1: print to file [data filename prefix].group.[MPI rank] if -w >0"),
@@ -607,6 +621,13 @@ public:
         assert(n_smp_ave.value>0.0);
         assert(theta.value>=0.0);
         assert(eta.value>0.0);
+#ifdef FROZEN_BINARY
+        assert(frozen_energy_factor.value>0.0);
+        assert(frozen_time_factor.value>0.0);
+        assert(frozen_perturbation_limit.value>0.0);
+        assert(frozen_radius_factor.value>1.0);
+        assert(frozen_ecc_limit.value>=0.0 && frozen_ecc_limit.value<1.0);
+#endif
         return true;
     }
 
@@ -3397,6 +3418,22 @@ public:
             hard_manager.ar_manager.interaction.bse_manager.initial(bse_parameters, print_flag);
             hard_manager.ar_manager.interaction.tide.speed_of_light = hard_manager.ar_manager.interaction.bse_manager.getSpeedOfLight();
         }
+#ifdef FROZEN_BINARY
+        // vel_disp is one-dimensional; 3/2 m sigma^2 is the mean kinetic
+        // energy per cluster star in the center-of-mass frame.
+        hard_manager.ar_manager.interaction.frozen_energy_factor =
+            input_parameters.frozen_energy_factor.value;
+        hard_manager.ar_manager.interaction.frozen_kinetic_energy_ref =
+            1.5*mass_average*vel_disp*vel_disp;
+        hard_manager.ar_manager.interaction.frozen_min_interval =
+            input_parameters.frozen_time_factor.value*dt_soft;
+        hard_manager.ar_manager.interaction.frozen_perturbation_limit =
+            input_parameters.frozen_perturbation_limit.value;
+        hard_manager.ar_manager.interaction.frozen_radius_factor =
+            input_parameters.frozen_radius_factor.value;
+        hard_manager.ar_manager.interaction.frozen_ecc_limit =
+            input_parameters.frozen_ecc_limit.value;
+#endif
 
         // initial stellar evolution for each star
         if (!restart_flag) {

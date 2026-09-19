@@ -8,6 +8,7 @@ use_gperf=@use_gperf@
 use_quad = @use_quad@
 use_fdps_comm=@use_fdps_comm@
 use_bhmerger=@use_bhmerger@
+use_frozen_binary=@use_frozen_binary@
 debug_mode=@with_debug@
 step_mode=@with_step_mode@
 se_mode=@with_interrupt@
@@ -264,6 +265,10 @@ build/petar.hard.debug: hard_debug.cxx $(HARD_SRC) $(BSELIBFILES) |build
 # BSE integration regression: only instantaneous stellar contact may merge.
 build/petar.tide_collision.test: test/tide_collision.cxx $(HARD_SRC) two_body_tide.hpp $(BSELIBFILES) |build
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
+
+# Compile-time isolated regression for the optional frozen-binary policy.
+build/petar.frozen_binary.test: test/frozen_binary.cxx $(HARD_SRC) two_body_tide.hpp $(BSELIBFILES) |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -D FROZEN_BINARY -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
 
 build/petar.hard.test: hard_test.cxx $(HARD_SRC) |build
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(HARD_MT_FLAGS) $(HARD_DEBFLAGS) -o $@ $< $(CXXLIBS)

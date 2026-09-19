@@ -39,6 +39,31 @@ concurrency bugs that could propagate invalid particle data or crash a run:
   pericentre. The same physical-contact requirement is used for bound and
   unbound encounters, and stale delayed-collision flags are cleared.
 
+### Single capture update and BSE tides (zhujie)
+
+The additional dynamical-tide energy-loss prescription now acts only on
+unbound encounters (`a < 0`). After a successful capture, further updates from
+that prescription stop, including any remaining slowdown repetitions. Bound
+binaries use BSE tidal evolution when `bse-tflag > 0`. This replaces repeated
+extra tidal updates of captured binaries with the capture update followed by
+BSE evolution, limiting overlap between the two prescriptions. The regression
+checks bound-orbit exclusion, successful capture and post-capture exclusion.
+
+### Optional frozen-binary optimization
+
+Build with `--enable-frozen-binary` to enable the experimental, reversible
+frozen state; it is disabled by default. Eligible hard, detached, weakly
+perturbed binaries with `ecc < min(frozen-ecc-limit, 0.1)` can reduce frequent
+BSE checks. Isolated frozen pairs advance their internal phase analytically;
+frozen inner pairs in hierarchical groups use perturbation-safe SDAR slowdown.
+Scheduled stellar updates, unsafe encounters and membership changes restore
+normal integration. See [the PeTar documentation](PeTar_new_version/README.md#optional-frozen-binary-state)
+for parameters and safety checks.
+
+**Current local tests have not shown a significant overall performance
+improvement from frozen mode.** No general speedup is claimed; the feature
+remains optional and requires workload-specific validation.
+
 ## Upstream starting points
 
 The working-tree snapshot was based on these commits before including local

@@ -43,6 +43,94 @@ After completing the installation process, users can quickly get started by expl
 
 Furthermore, users can access a Jupyter Notebook titled [data\_analysis.ipynb](https://github.com/lwang-astro/PeTar/blob/master/sample/data_analysis.ipynb), which provides examples of data analysis in Python. By running one of the sample scripts, users can subsequently refer to the demonstrations in this notebook to analyze the simulation results. The data analysis module in PeTar offers greater convenience compared to manually parsing the output files. It is advisable to leverage this module instead of crafting reading code from scratch.
 
+## Local stability fixes
+
+### Instantaneous-contact merger criterion
+
+For ordinary stars with BSE stellar types `kw=1-13`, a predicted
+`Contact` or `Coalescence` event no longer causes an immediate, irreversible
+merger while the stars are still spatially detached. PeTar now merges these
+stars only when their integrated instantaneous separation satisfies
+`r <= R1 + R2`. Until that physical contact occurs, both stars remain in the
+integration and can respond to perturbations that may prevent the predicted
+future collision. This change therefore recovers objects that were previously
+removed by false-positive merger predictions based only on the osculating
+orbit or pericentre.
+
+The same contact requirement is applied to bound and unbound encounters, and
+stale delayed-collision flags are cleared when the stars are detached. The
+post-BSE orbit is also rebuilt consistently before collision and tidal checks.
+A regression test for elliptic and hyperbolic encounters is available in
+[`test/tide_collision.cxx`](test/tide_collision.cxx).
+
+### Single capture update; bound-binary tides handled by BSE
+
+zhujie restricted the additional dynamical-tide prescription to unbound
+encounters (`a < 0`). It can remove orbital energy and capture a pair, but
+once the orbit becomes bound it stops applying further energy-loss updates.
+The slowdown compensation loop also stops at capture, and the underlying
+routine returns zero without changing an already bound orbit. This replaces
+repeated application to a captured binary with the capture update followed
+by BSE tidal evolution (when `bse-tflag > 0`). It does not mean that every
+unbound encounter captures or that a disrupted pair can never encounter again.
+
+This change limits overlap between the additional energy-loss prescription
+(which holds orbital angular momentum fixed) and BSE circularization/spin
+synchronization. It does not establish a measured correction to merger rates.
+The regression in `test/tide_collision.cxx` checks that bound orbits are
+unchanged by this prescription, unbound capture still works, and a newly
+captured pair receives no subsequent loss from the same prescription.
+
+### Optional frozen-binary state
+
+Configure with `--enable-frozen-binary` to compile the reversible
+`FROZEN_BINARY` optimization. It is disabled by default and therefore does not
+change the normal particle state, input parameters, or execution path.
+
+When enabled, an ordinary (`kw=1-13`) bound binary may enter the frozen state
+if its binding energy exceeds 10 times the mean cluster kinetic energy, its
+periapsis is safely outside the stellar surfaces, and its external perturbation
+is weak. The next BSE update must normally be far away. A detached binary below
+the eccentricity limit may override a zero BSE interval; PeTar then schedules
+one BSE update after the frozen interval instead of calling BSE every AR step.
+Frozen suppresses
+opportunistic calls to orbit-averaged BSE before the already scheduled
+stellar-evolution time. If the frozen pair is an isolated two-body hard group,
+PeTar also skips its SDAR internal substeps and advances its relative phase with
+the analytic Kepler solution over each tree step. Its centre of mass remains in
+the normal hard/soft integration. A scheduled stellar update, stronger
+perturbation, unsafe periapsis, member exchange, or tidal change automatically
+removes the state and restores SDAR. A frozen inner binary in a hierarchical
+group uses SDAR's maximum perturbation-safe slowdown while the outer hierarchy
+continues through SDAR, retaining its secular perturbations without resolving
+every inner orbit.
+
+All candidates require `ecc < min(frozen-ecc-limit, 0.1)`. Tight pairs with
+periapsis below `10 * (R1 + R2)` can bypass the configurable clearance factor,
+but both instantaneous separation and periapsis must remain above `R1 + R2`.
+The binding-energy, stellar-state and perturbation checks still apply.
+
+**Current performance:** local tests have not shown a significant overall
+speedup from frozen mode. It remains an experimental, optional optimization;
+no quantitative speedup is claimed for general cluster simulations. See
+[`test/frozen_binary.md`](test/frozen_binary.md) for the regression coverage.
+
+The defaults can be changed in the PeTar parameter file when the feature is
+compiled:
+
+- `frozen-energy-factor = 10`
+- `frozen-time-factor = 100` tree steps
+- `frozen-perturbation-limit = 1e-6`
+- `frozen-radius-factor = 3`
+- `frozen-ecc-limit = 0.1` (strict upper limit; values above 0.1 do not relax the cap)
+
+For example:
+
+```sh
+./configure --with-interrupt=bse --enable-frozen-binary [other options]
+make -j
+```
+
 # About the version
 
 PeTar code is maintained across multiple branches, and for users seeking stability, it is advisable to obtain the released version. The master branch undergoes regular updates to introduce new features and address bugs. Users can opt for this version if they find the new features beneficial.

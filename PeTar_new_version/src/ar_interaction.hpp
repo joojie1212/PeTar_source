@@ -33,12 +33,25 @@ public:
 #ifdef BHMERGER
     BHMergerOutput bhmerger_output; ///> black-hole merger event output
 #endif
+#ifdef FROZEN_BINARY
+    Float frozen_energy_factor;       ///> |Ebin| / central mean kinetic energy
+    Float frozen_kinetic_energy_ref;  ///> central mean kinetic energy per star
+    Float frozen_min_interval;        ///> minimum interval before the next BSE check
+    Float frozen_perturbation_limit;  ///> maximum external/internal force ratio
+    Float frozen_radius_factor;       ///> minimum periapsis in units of R1+R2
+    Float frozen_ecc_limit;           ///> eccentricity limit for tight-pair and BSE interval overrides
+#endif
 
     ARInteraction(): eps_sq(Float(-1.0)), gravitational_constant(Float(-1.0)),
                      stellar_evolution_option(1), stellar_evolution_write_flag(true), time_interrupt_max(NUMERIC_FLOAT_MAX),
                      bse_manager(), fout_sse(), fout_bse()
 #ifdef BHMERGER
                      , bhmerger_output()
+#endif
+#ifdef FROZEN_BINARY
+                     , frozen_energy_factor(10.0), frozen_kinetic_energy_ref(1.0),
+                     frozen_min_interval(1.0), frozen_perturbation_limit(1.0e-6),
+                     frozen_radius_factor(3.0), frozen_ecc_limit(0.1)
 #endif
                      {}
 #else
@@ -61,6 +74,14 @@ public:
         ASSERT(stellar_evolution_option==0 || (stellar_evolution_option==1 && bse_manager.checkParams()) || (stellar_evolution_option==2 && bse_manager.checkParams() && tide.checkParams()));
         ASSERT(!stellar_evolution_write_flag||(stellar_evolution_write_flag&&fout_sse.is_open()));
         ASSERT(!stellar_evolution_write_flag||(stellar_evolution_write_flag&&fout_bse.is_open()));
+#ifdef FROZEN_BINARY
+        ASSERT(frozen_energy_factor>0.0);
+        ASSERT(frozen_kinetic_energy_ref>0.0);
+        ASSERT(frozen_min_interval>0.0);
+        ASSERT(frozen_perturbation_limit>0.0);
+        ASSERT(frozen_radius_factor>1.0);
+        ASSERT(frozen_ecc_limit>=0.0 && frozen_ecc_limit<1.0);
+#endif
 #endif
 #endif
         return true;
@@ -72,8 +93,107 @@ public:
              <<"G      : "<<gravitational_constant<<std::endl;
 #ifdef STELLAR_EVOLUTION
         _fout<<"SE_opt : "<<stellar_evolution_option<<std::endl;
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+        _fout<<"Frozen binary energy factor       : "<<frozen_energy_factor<<std::endl
+             <<"Frozen binary kinetic reference   : "<<frozen_kinetic_energy_ref<<std::endl
+             <<"Frozen binary minimum interval    : "<<frozen_min_interval<<std::endl
+             <<"Frozen binary perturbation limit  : "<<frozen_perturbation_limit<<std::endl
+             <<"Frozen binary radius factor       : "<<frozen_radius_factor<<std::endl
+             <<"Frozen binary eccentricity limit  : "<<frozen_ecc_limit<<std::endl;
+#endif
 #endif
     }
+
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+    bool isFrozenPair(const PtclHard& _p1, const PtclHard& _p2) const {
+        return _p1.isBinaryFrozen() && _p2.isBinaryFrozen()
+            && _p1.getBinaryPairID()==_p2.id
+            && _p2.getBinaryPairID()==_p1.id;
+    }
+
+    void setFrozenPair(PtclHard& _p1, PtclHard& _p2, const bool _frozen) const {
+        if (_frozen) {
+            _p1.setBinaryPairID(_p2.id);
+            _p2.setBinaryPairID(_p1.id);
+        }
+        _p1.setBinaryFrozen(_frozen);
+        _p2.setBinaryFrozen(_frozen);
+    }
+
+    //! Frozen eligibility shared by BSE scheduling and the hard-integrator takeover.
+    bool isBinaryFrozenEligible(const AR::BinaryTree<PtclHard>& _bin,
+                                const PtclHard& _p1,
+                                const PtclHard& _p2,
+                                const Float _time_now,
+                                const Float _next_bse_check,
+                                const char** _reason = nullptr) const {
+        auto reject = [&](const char* reason) {
+            if (_reason) *_reason = reason;
+            return false;
+        };
+        if (!(_p1.star.kw>=1 && _p1.star.kw<=13
+              && _p2.star.kw>=1 && _p2.star.kw<=13)) return reject("stellar_type");
+        if (!std::isfinite(_bin.semi) || !std::isfinite(_bin.ecc)
+            || _bin.semi<=0.0 || _bin.ecc<0.0 || _bin.ecc>=1.0) return reject("invalid_orbit");
+        // Keep the dynamical-tide activation range out even with old parameter files.
+        if (_bin.ecc>=std::min(frozen_ecc_limit, Float(0.1))) return reject("eccentricity");
+        if (!std::isfinite(_next_bse_check)) return reject("invalid_bse_time");
+
+        const int state1 = static_cast<int>(_p1.getBinaryInterruptState());
+        const int state2 = static_cast<int>(_p2.getBinaryInterruptState());
+        // A new candidate must be quiescent. State 15 is the frozen state itself.
+        const bool state1_safe = state1==0 || state1==15;
+        const bool state2_safe = state2==0 || state2==15;
+        if (!state1_safe || !state2_safe) return reject("stellar_event");
+
+        const Float radius_sum = _p1.radius + _p2.radius;
+        const Float peri = _bin.semi*(1.0-_bin.ecc);
+        // Never bypass contact handling. Tight, circular pairs may otherwise
+        // freeze inside the usual clearance limit: these are particularly
+        // expensive to integrate orbit by orbit.
+        if (!(radius_sum>0.0 && _bin.r>radius_sum && peri>radius_sum))
+            return reject("contact_distance");
+        const bool tight_circular = _bin.ecc<frozen_ecc_limit
+                                && peri<10.0*radius_sum;
+        if (!tight_circular
+            && !(_bin.r>frozen_radius_factor*radius_sum
+                 && peri>frozen_radius_factor*radius_sum)) return reject("clearance");
+
+        // BSE may request an immediate recheck forever for a detached, already
+        // circularized tidal binary.  In that state the zero interval contains no
+        // useful orbital information: permit frozen to impose a finite cadence.
+        const bool bse_interval_safe =
+            _next_bse_check-_time_now >= frozen_min_interval;
+        const bool circular_detached_override = _bin.ecc<frozen_ecc_limit;
+        if (!bse_interval_safe && !circular_detached_override) return reject("bse_interval");
+
+        const Float binding_energy = gravitational_constant*_p1.mass*_p2.mass
+                                   /(2.0*_bin.semi);
+        if (!std::isfinite(binding_energy)
+            || binding_energy<=frozen_energy_factor*frozen_kinetic_energy_ref)
+            return reject("binding_energy");
+
+        const Float pert_in = std::fabs(_bin.slowdown.getPertIn());
+        const Float pert_out = std::fabs(_bin.slowdown.getPertOut());
+        if (!(pert_in>0.0) || !std::isfinite(pert_in) || !std::isfinite(pert_out)
+            || pert_out/pert_in>frozen_perturbation_limit) return reject("external_perturbation");
+        if (_reason) *_reason = tight_circular ? "tight_low_ecc" : "ordinary_clearance";
+        return true;
+    }
+    // Log before clearing so repeated callers cannot emit duplicate ends.
+    void thawFrozenPair(PtclHard& p1, PtclHard& p2, const Float time,
+                        const char* reason) {
+        if (stellar_evolution_write_flag && (p1.isBinaryFrozen() || p2.isBinaryFrozen())) {
+#pragma omp critical(frozen_binary_logging)
+            fout_bse << "Frozen_binary_end " << std::setw(WRITE_WIDTH) << time
+                     << std::setw(WRITE_WIDTH) << p1.id
+                     << std::setw(WRITE_WIDTH) << p2.id
+                     << " reason=" << reason << std::endl;
+        }
+        setFrozenPair(p1, p2, false);
+    }
+
+#endif
 
     //! (Necessary) calculate inner member acceleration, potential and inverse time transformation function gradient and factor for kick (two-body case)
     /*!
@@ -1013,17 +1133,74 @@ public:
                 Float dt = _bin_interrupt.time_now - std::max(p1->time_record,p2->time_record);
                 if (time_check<=_bin_interrupt.time_now&&dt>0) check_flag = true;
 
+#ifdef FROZEN_BINARY
+                // Freeze only the opportunistic BSE call caused by changing orbital
+                // elements. The scheduled stellar-evolution check remains active.
+                const bool had_frozen_flag = p1->isBinaryFrozen() || p2->isBinaryFrozen();
+                bool frozen_pair = isFrozenPair(*p1, *p2);
+                const char* frozen_reason = nullptr;
+                const bool frozen_eligible = isBinaryFrozenEligible(
+                    _bin, *p1, *p2, _bin_interrupt.time_now, time_check, &frozen_reason);
+                if (had_frozen_flag && (!frozen_pair || !frozen_eligible)) {
+                    thawFrozenPair(*p1, *p2, _bin_interrupt.time_now,
+                                   !frozen_pair ? "pair_mismatch" : frozen_reason);
+                    frozen_pair = false;
+                }
+                else if (!frozen_pair && frozen_eligible) {
+                    setFrozenPair(*p1, *p2, true);
+                    frozen_pair = true;
+                    // Override BSE's zero/near-zero interval for a circular,
+                    // detached system.  At expiry the pair is thawed below and BSE
+                    // is called once before it can enter another frozen interval.
+                    if (time_check-_bin_interrupt.time_now < frozen_min_interval) {
+                        p1->time_interrupt = _bin_interrupt.time_now+frozen_min_interval;
+                        p2->time_interrupt = p1->time_interrupt;
+                        time_check = p1->time_interrupt;
+                        check_flag = false;
+                    }
+                    if (stellar_evolution_write_flag) {
+                        const Float binding_energy = gravitational_constant*p1->mass*p2->mass
+                                                   /(2.0*_bin.semi);
+#pragma omp critical(frozen_binary_logging)
+                        fout_bse<<"Frozen_binary_start "
+                                <<std::setw(WRITE_WIDTH)<<_bin_interrupt.time_now
+                                <<std::setw(WRITE_WIDTH)<<p1->id
+                                <<std::setw(WRITE_WIDTH)<<p2->id
+                                <<std::setw(WRITE_WIDTH)<<binding_energy
+                                <<std::setw(WRITE_WIDTH)<<time_check
+                                <<" reason="<<frozen_reason
+                                <<" ecc="<<_bin.ecc
+                                <<" peri_over_rsum="<<_bin.semi*(1.0-_bin.ecc)/(p1->radius+p2->radius)
+                                <<std::endl;
+                    }
+                }
+                else if (frozen_pair && time_check<=_bin_interrupt.time_now) {
+                    thawFrozenPair(*p1, *p2, _bin_interrupt.time_now, "bse_due");
+                    frozen_pair = false;
+                }
+                // A thaw converts state 15 back to none before BSE sees the type.
+                binary_type_p1 = static_cast<int>(p1->getBinaryInterruptState());
+                binary_type_p2 = static_cast<int>(p2->getBinaryInterruptState());
+                binary_type_init = (binary_type_p1==binary_type_p2)
+                                 ? binary_type_p1 : 0;
+#endif
+
                 if (!check_flag) {
                     // pre simple check whether calling BSE is needed
                     Float t_record_min = std::min(p1->time_record,p2->time_record);
 
-
+#ifdef FROZEN_BINARY
+                    if (!frozen_pair)
+#endif
                     if (t_record_min<_bin_interrupt.time_now&&_bin.semi>0 && (!bse_manager.isMassTransfer(binary_type_init)) && (!bse_manager.isDisrupt(binary_type_init))) {
                         check_flag=bse_manager.isCallBSENeeded(p1->star, p2->star, _bin.semi, _bin.ecc, dt);
                     }
                 }
 
                 if (check_flag) {
+#ifdef FROZEN_BINARY
+                    thawFrozenPair(*p1, *p2, _bin_interrupt.time_now, "bse_update");
+#endif
                     ASSERT(bse_manager.checkParams());
                     // record address of modified binary
                     _bin_interrupt.adr = &_bin;
@@ -1126,8 +1303,23 @@ public:
                         // intervening perturbation is retained.
                         p1->star = p1_star_bk;
                         p2->star = p2_star_bk;
+#ifdef FROZEN_BINARY
+                        // Contact is checked from the integrated positions below, so
+                        // repeatedly asking orbit-averaged BSE at every AR substep adds
+                        // cost without new stellar information. Resume at the normal
+                        // BSE stellar-evolution time instead.
+                        Float next_bse_dt = bse_manager.getTimeStepBinary(
+                            p1->star, p2->star, semi, ecc, binary_type_init);
+                        p1->time_interrupt = std::min(
+                            _bin_interrupt.time_now + std::max(next_bse_dt, frozen_min_interval),
+                            time_interrupt_max);
+#else
                         p1->time_interrupt = _bin_interrupt.time_now;
+#endif
                         p2->time_interrupt = _bin_interrupt.time_now;
+#ifdef FROZEN_BINARY
+                        p2->time_interrupt = p1->time_interrupt;
+#endif
                         event_flag = 0;
                     }
 
@@ -1184,6 +1376,9 @@ public:
             if (_bin_interrupt.status!=AR::InterruptStatus::merge&&_bin_interrupt.status!=AR::InterruptStatus::destroy) {
 
                 auto merge = [&](const Float& dr, const Float& t_peri, const Float& sd_factor) {
+#if defined(BSE_BASE) && defined(FROZEN_BINARY)
+                    thawFrozenPair(*p1, *p2, _bin_interrupt.time_now, "merger");
+#endif
                     _bin_interrupt.adr = &_bin;
 
 #ifdef BSE_BASE
@@ -1584,7 +1779,9 @@ public:
                                     else change_flag = true;
                                 }
                             }
-                            else if (std::min(p1->star.kw, p2->star.kw)<13) {
+                            // zhujie: apply additional dynamical tides only to
+                            // unbound encounters; leave bound-binary tides to BSE.
+                            else if (_bin.semi<0.0 && std::min(p1->star.kw, p2->star.kw)<13) {
                                 poly_type1 = (p1->star.kw<=2) ? 3.0 : 1.5;
                                 poly_type2 = (p2->star.kw<=2) ? 3.0 : 1.5;
                                 const Float peri = _bin.semi*(1.0-_bin.ecc);
@@ -1602,7 +1799,8 @@ public:
                                 // for slowdown case, repeating tide effect based on slowdown factor
                                 Float sd_factor_ext = _bin.slowdown.getSlowDownFactor() - 1.5;
                                 if (change_flag && sd_factor_ext>0) {
-                                    for (Float k=0; k<sd_factor_ext; k=k+1.0) {
+                                    // zhujie: stop this prescription once capture binds the pair.
+                                    for (Float k=0; k<sd_factor_ext && _bin.semi<0.0; k=k+1.0) {
                                         Float etid_k = tide.evolveOrbitDynamicalTide(_bin, rad1, rad2, poly_type1, poly_type2);
                                         if (etid_k==0) break;
                                         Etid += etid_k;
@@ -1613,6 +1811,11 @@ public:
                             if (change_flag) {
 
                                 _bin_interrupt.adr = &_bin;
+#ifdef FROZEN_BINARY
+                                // A dissipative orbital change invalidates the frozen
+                                // assumptions immediately.
+                                thawFrozenPair(*p1, *p2, _bin_interrupt.time_now, "tidal_orbit_change");
+#endif
 
                                 // if status not set, set to change
                                 if (_bin_interrupt.status == AR::InterruptStatus::none)
