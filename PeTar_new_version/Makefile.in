@@ -85,7 +85,7 @@ SE_INSTALL:
 	$(MAKE) -C bse-interface install
 SE_CLEAN:
 	$(MAKE) -C bse-interface clean
-bse-interface/libbse.a: bse-interface
+bse-interface/libbse.a: bse-interface bse-interface/$(se_mode)/evolv2.f
 	$(MAKE) -C bse-interface 
 endif
 endif

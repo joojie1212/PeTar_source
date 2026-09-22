@@ -8,6 +8,12 @@
  */
 class TwoBodyTide{
 public:
+    static constexpr double eccentricity_switch = 0.9;
+
+    static bool usesDynamicalTide(const Float _ecc) {
+        return _ecc > eccentricity_switch;
+    }
+
     Float gravitational_constant;  
     Float speed_of_light;  // should have the same unit set as that of G
 
@@ -102,16 +108,14 @@ public:
     template <class TBinary>
     Float evolveOrbitDynamicalTide(TBinary& _bin, const Float& rad1, const Float& rad2, const Float& poly_type1, const Float& poly_type2) {
         ASSERT(_bin.getMemberN()==2);
-        // zhujie: reserve this energy-loss prescription for unbound encounters.
-        // Bound binaries use BSE tides, including after a successful capture.
-        if (_bin.semi >= 0.0) return 0.0;
+        // High-eccentricity encounters, including bound binaries, use this
+        // prescription. BSE handles tides at and below the shared boundary.
+        if (!usesDynamicalTide(_bin.ecc)) return 0.0;
 
         ASSERT(_bin.m1>0);
         ASSERT(_bin.m2>0);
         ASSERT(poly_type1==1.5||poly_type1==3.0);
         ASSERT(poly_type2==1.5||poly_type2==3.0);
-
-        if (_bin.ecc<0.1) return 0.0; // no tide effect when ecc is low
 
 		Float peri = _bin.semi * (1.0 - _bin.ecc);
         ASSERT(peri>rad1+rad2);
@@ -156,11 +160,20 @@ public:
         // update semi
         Float GM12 = gravitational_constant * _bin.m1 * _bin.m2;
         Float Ebin = - GM12 / (2.0 * _bin.semi);
+        // Stop at the handoff rather than applying the high-e prescription
+        // in BSE's regime. This also prevents a negative eccentricity square
+        // if a close passage or slowdown compensation would over-circularize.
+        const Float semi_switch = pold/(1.0-eccentricity_switch*eccentricity_switch);
+        const Float energy_switch = -GM12/(2.0*semi_switch);
+        const Float loss_to_switch = Ebin-energy_switch;
+        if (!(Etid>0.0) || !(loss_to_switch>0.0)) return 0.0;
+        const bool reach_switch = Etid>=loss_to_switch;
+        if (reach_switch) Etid=loss_to_switch;
         Float Ebin_new = Ebin - Etid;
-        _bin.semi = - GM12 / (2.0 * Ebin_new);
+        _bin.semi = reach_switch ? semi_switch : -GM12/(2.0*Ebin_new);
 
         // use semi-latus rectum  to update ecc
-        _bin.ecc = sqrt(1.0 - pold/_bin.semi);
+        _bin.ecc = reach_switch ? eccentricity_switch : sqrt(1.0 - pold/_bin.semi);
         ASSERT(_bin.ecc>=0.0);
         //_bin.calcParticles(gravitational_constant);
         //p1->pos += _bin.pos;

@@ -63,23 +63,47 @@ post-BSE orbit is also rebuilt consistently before collision and tidal checks.
 A regression test for elliptic and hyperbolic encounters is available in
 [`test/tide_collision.cxx`](test/tide_collision.cxx).
 
-### Single capture update; bound-binary tides handled by BSE
+#### Selecting the merger radius
 
-zhujie restricted the additional dynamical-tide prescription to unbound
-encounters (`a < 0`). It can remove orbital energy and capture a pair, but
-once the orbit becomes bound it stops applying further energy-loss updates.
-The slowdown compensation loop also stops at capture, and the underlying
-routine returns zero without changing an already bound orbit. This replaces
-repeated application to a captured binary with the capture update followed
-by BSE tidal evolution (when `bse-tflag > 0`). It does not mean that every
-unbound encounter captures or that a disrupted pair can never encounter again.
+The default merger radius is the physical surface-overlap distance `R1 + R2`.
+For controlled collision-threshold experiments, pass `--debug_lessmerger` to
+replace it with `1e-6` solar radii, or give a positive custom pair distance in
+solar radii, such as `--debug_lessmerger 0.01` or
+`--debug_lessmerger=0.01`. Omitting the option restores `R1 + R2`.
 
-This change limits overlap between the additional energy-loss prescription
-(which holds orbital angular momentum fixed) and BSE circularization/spin
-synchronization. It does not establish a measured correction to merger rates.
-The regression in `test/tide_collision.cxx` checks that bound orbits are
-unchanged by this prescription, unbound capture still works, and a newly
-captured pair receives no subsequent loss from the same prescription.
+This override is used by PeTar's instantaneous and delayed AR merger checks,
+including the contact gate for ordinary-star BSE `Contact` and `Coalescence`
+predictions. It does not change the stellar radii supplied to BSE or used by
+dynamical-tide calculations.
+
+### Eccentricity-based tidal prescription
+
+With `--stellar-evolution 2`, eligible stellar pairs use the additional
+constant-angular-momentum dynamical-tide prescription when `e > 0.9`, on
+both bound and unbound orbits. At `e <= 0.9`, BSE handles tides, subject to
+`--bse-tflag` (or the corresponding MOBSE switch). Single-star evolution,
+mass transfer and the other BSE processes continue at all eccentricities.
+The compact-pair gravitational-wave prescription retains its own dispatch.
+With `--stellar-evolution 1`, BSE retains its configured tidal behavior at
+all eccentricities and the additional dynamical tide is inactive.
+
+BSE receives a cutoff local to each evolution call and checks it at every
+internal evolution step, in both detached and mass-transfer tidal branches.
+The shared `tflag` is never temporarily changed. The legacy Fortran entry
+and standalone BSE calls retain their default behavior without a cutoff.
+
+Additional tidal losses require a detached periapsis and the existing
+outgoing-passage/pair-state checks. Losses are capped at the energy needed
+to reach `e = 0.9` at fixed orbital angular momentum. Slowdown compensation
+then stops; it may continue after capture while `e > 0.9`. This prevents
+overshooting the handoff or producing an imaginary eccentricity. BSE tidal
+evolution resumes on its next scheduled call; the switch does not replace
+the normal BSE scheduling or the instantaneous-contact merger criterion.
+
+This threshold is a modeling choice, not a demonstrated improvement in
+merger rates. The regression in `test/tide_collision.cxx` checks the boundary,
+bound high-eccentricity losses, capture and handoff, the real BSE tidal
+cutoff with continuing stellar evolution, and instantaneous contact.
 
 ### Optional frozen-binary state
 

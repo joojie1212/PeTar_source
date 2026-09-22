@@ -39,6 +39,17 @@ concurrency bugs that could propagate invalid particle data or crash a run:
   pericentre. The same physical-contact requirement is used for bound and
   unbound encounters, and stale delayed-collision flags are cleared.
 
+### Merger radius selection
+
+By default, PeTar uses the physical surface-overlap distance `R1 + R2` for
+instantaneous and delayed AR merger checks. For controlled collision-threshold
+experiments, `--debug_lessmerger` replaces this pair distance with `1e-6` solar
+radii. A positive custom distance can be supplied in solar radii, for example
+`--debug_lessmerger 0.01` or `--debug_lessmerger=0.01`. Omitting the option
+restores the physical `R1 + R2` criterion. The override also applies to the
+contact gate for ordinary-star BSE `Contact` and `Coalescence` predictions, but
+does not modify the stellar radii passed to BSE or used by dynamical tides.
+
 ### Single capture update and BSE tides (zhujie)
 
 The additional dynamical-tide energy-loss prescription now acts only on

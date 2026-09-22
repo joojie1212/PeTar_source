@@ -28,6 +28,7 @@ public:
 #ifdef BSE_BASE
     BSEManager bse_manager;
     TwoBodyTide tide;
+    Float debug_lessmerger_rsun; ///> if positive, replace the pair collision distance [Rsun]
     std::ofstream fout_sse; ///> log file for SSE event
     std::ofstream fout_bse; ///> log file for BSE event
 #ifdef BHMERGER
@@ -44,7 +45,7 @@ public:
 
     ARInteraction(): eps_sq(Float(-1.0)), gravitational_constant(Float(-1.0)),
                      stellar_evolution_option(1), stellar_evolution_write_flag(true), time_interrupt_max(NUMERIC_FLOAT_MAX),
-                     bse_manager(), fout_sse(), fout_bse()
+                     bse_manager(), debug_lessmerger_rsun(0.0), fout_sse(), fout_bse()
 #ifdef BHMERGER
                      , bhmerger_output()
 #endif
@@ -60,6 +61,14 @@ public:
 #endif
 #else
     ARInteraction(): eps_sq(Float(-1.0)), gravitational_constant(Float(-1.0)) {}
+#endif
+
+#ifdef BSE_BASE
+    Float mergerCheckRadius(const PtclHard& p1, const PtclHard& p2) const {
+        return debug_lessmerger_rsun>0.0
+            ? debug_lessmerger_rsun/bse_manager.rscale
+            : p1.radius+p2.radius;
+    }
 #endif
 
     //! (Necessary) check whether publicly initialized parameters are correctly set
@@ -1243,7 +1252,16 @@ public:
                     BinaryEvent bin_event;
                     // loop until the time_end reaches
                     //std::cout << "beforebinary:"<<ecc <<std::endl;
-                    int event_flag = bse_manager.evolveBinary(p1->star, p2->star, out[0], out[1], semi, period, ecc, bin_event, binary_type_init, dt);
+                    // Switch only the tidal terms. Other BSE evolution still
+                    // runs at high eccentricity; compact-pair GW keeps its own
+                    // prescription. The cutoff is local to this Fortran call.
+                    const bool compact_pair = p1->star.kw>=10 && p1->star.kw<15
+                                           && p2->star.kw>=10 && p2->star.kw<15;
+                    const double tide_ecc_limit =
+                        (stellar_evolution_option==2 && !compact_pair
+                         && std::min(p1->star.kw,p2->star.kw)<13)
+                        ? TwoBodyTide::eccentricity_switch : -1.0;
+                    int event_flag = bse_manager.evolveBinary(p1->star, p2->star, out[0], out[1], semi, period, ecc, bin_event, binary_type_init, dt, tide_ecc_limit);
                     //std::cout << "binary:"<<ecc <<std::endl;
                     // error
                     if (event_flag<0) {
@@ -1291,7 +1309,7 @@ public:
                     const bool ordinary_stars =
                         p1_star_bk.kw>=1 && p1_star_bk.kw<=13
                         && p2_star_bk.kw>=1 && p2_star_bk.kw<=13;
-                    const Float contact_radius = p1->radius + p2->radius;
+                    const Float contact_radius = mergerCheckRadius(*p1, *p2);
                     const bool instant_contact =
                         _bin.r <= contact_radius;
                     const bool defer_predicted_merger =
@@ -1580,7 +1598,7 @@ public:
                                    p1->pos[1] - p2->pos[1],
                                    p1->pos[2] - p2->pos[2]};
                     Float dr2  = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
-                    const Float radius = p1->radius + p2->radius;
+                    const Float radius = mergerCheckRadius(*p1, *p2);
                     if (dr2 <= radius*radius) {
                         merge(std::sqrt(dr2), 0.0, 1.0);
                     }
@@ -1594,6 +1612,9 @@ public:
                 else {
                     // check merger
                     Float radius = p1->radius + p2->radius;
+#ifdef BSE_BASE
+                    radius = mergerCheckRadius(*p1, *p2);
+#endif
 #ifndef BSE_BASE
                     // slowdown case
                     if (_bin.slowdown.getSlowDownFactor()>1.0) {
@@ -1779,28 +1800,26 @@ public:
                                     else change_flag = true;
                                 }
                             }
-                            // zhujie: apply additional dynamical tides only to
-                            // unbound encounters; leave bound-binary tides to BSE.
-                            else if (_bin.semi<0.0 && std::min(p1->star.kw, p2->star.kw)<13) {
+                            // Extra dynamical tides act above e=0.9, on both
+                            // bound and unbound orbits. BSE tides act below it.
+                            else if (TwoBodyTide::usesDynamicalTide(_bin.ecc)
+                                     && std::min(p1->star.kw, p2->star.kw)<13) {
                                 poly_type1 = (p1->star.kw<=2) ? 3.0 : 1.5;
                                 poly_type2 = (p2->star.kw<=2) ? 3.0 : 1.5;
                                 const Float peri = _bin.semi*(1.0-_bin.ecc);
-                                // This branch is reached on the outgoing leg. A
-                                // step can cross stellar contact without sampling
-                                // overlapping positions; bound collisions are also
-                                // absent from the hyperbolic-only check above.
-                                // Resolve that encounter before applying a model
-                                // which requires a detached pericentre.
-                                if (!(std::isfinite(peri) && peri >= 0.0
-                                      && peri <= rad1+rad2)) {
+                                // This prescription requires a detached periapsis.
+                                // Physical overlap is handled by the contact checks.
+                                if (std::isfinite(peri) && peri>rad1+rad2) {
                                     Etid = tide.evolveOrbitDynamicalTide(_bin, rad1, rad2, poly_type1, poly_type2);
                                 }
                                 change_flag = (Etid>0);
                                 // for slowdown case, repeating tide effect based on slowdown factor
                                 Float sd_factor_ext = _bin.slowdown.getSlowDownFactor() - 1.5;
                                 if (change_flag && sd_factor_ext>0) {
-                                    // zhujie: stop this prescription once capture binds the pair.
-                                    for (Float k=0; k<sd_factor_ext && _bin.semi<0.0; k=k+1.0) {
+                                    // Re-evaluate after every compensated passage;
+                                    // stop as soon as the BSE regime is reached.
+                                    for (Float k=0; k<sd_factor_ext
+                                         && TwoBodyTide::usesDynamicalTide(_bin.ecc); k=k+1.0) {
                                         Float etid_k = tide.evolveOrbitDynamicalTide(_bin, rad1, rad2, poly_type1, poly_type2);
                                         if (etid_k==0) break;
                                         Etid += etid_k;

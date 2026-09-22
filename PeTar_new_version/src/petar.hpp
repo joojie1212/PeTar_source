@@ -23,6 +23,7 @@
 #include<fstream>
 #include<string>
 #include<sstream>
+#include<cstdlib>
 //#include<unistd.h>
 #include<getopt.h>
 
@@ -131,6 +132,9 @@ public:
     IOParams<PS::F64> sd_factor;
     IOParams<PS::S64> data_format;
     IOParams<PS::S64> write_style;
+#ifdef BSE_BASE
+    IOParams<PS::F64> debug_lessmerger;
+#endif
 #ifdef STELLAR_EVOLUTION
     IOParams<PS::S64> stellar_evolution_option;
 #endif
@@ -201,6 +205,9 @@ public:
                      sd_factor    (input_par_store, 1e-4, "slowdown-factor", "Slowdown perturbation criterion"),
                      data_format  (input_par_store, 1,    "i", "Data read(r)/write(w) format BINARY(B)/ASCII(A): r-B/w-A (3), r-A/w-B (2), rw-A (1), rw-B (0)"),
                      write_style  (input_par_store, 1,    "w", "File writing style: 0, no output; 1. write snapshots, status, and profile separately; 2. write snapshot and status in one line per step (no MPI support); 3. write only status and profile"),
+#ifdef BSE_BASE
+                     debug_lessmerger(input_par_store, 0.0, "debug_lessmerger", "Debug pair merger distance in Rsun; 0 disables override, bare option uses 1e-6 Rsun"),
+#endif
 #ifdef STELLAR_EVOLUTION
 #ifdef BSE_BASE
                      stellar_evolution_option  (input_par_store, 1, "stellar-evolution", "Stellar evolution of stars in Hermite+SDAR: 0: off; >=1: using SSE/BSE based codes; ==2: activate dynamical tide and hyperbolic gravitational wave radiation"),
@@ -260,6 +267,10 @@ public:
 #endif
             {step_limit_ar.key,        required_argument, &petar_flag, 15},   
             {"disable-print-info",     no_argument,       &petar_flag, 16},
+#ifdef BSE_BASE
+            {debug_lessmerger.key,    optional_argument, &petar_flag, 26},
+            {"debug-lessmerger",     optional_argument, &petar_flag, 26},
+#endif
             {n_interrupt_limit.key,    required_argument, &petar_flag, 17},
             {interrupt_detection_option.key,  required_argument, &petar_flag, 18},
             {n_step_per_orbit.key,     required_argument, &petar_flag, 19},
@@ -442,6 +453,30 @@ public:
                     if(print_flag) nstep_dt_soft_kepler.print(std::cout);
                     opt_used += 2;
                     break;
+#ifdef BSE_BASE
+                case 26: {
+                    // Also accept a space before the value of this optional argument.
+                    const char* value = optarg;
+                    if (value==NULL && optind<argc) {
+                        char* end=NULL;
+                        std::strtod(argv[optind], &end);
+                        if (end!=argv[optind] && *end=='\0') {
+                            value=argv[optind++];
+                            opt_used++;
+                        }
+                    }
+                    char* end=NULL;
+                    debug_lessmerger.value = value==NULL ? 1.0e-6 : std::strtod(value, &end);
+                    if ((value!=NULL && (end==value || *end!='\0'))
+                        || !(std::isfinite(debug_lessmerger.value) && debug_lessmerger.value>0.0)) {
+                        std::cerr<<"--debug_lessmerger requires a positive radius in Rsun\n";
+                        std::exit(1);
+                    }
+                    if(print_flag) debug_lessmerger.print(std::cout);
+                    opt_used++;
+                    break;
+                }
+#endif
                 default:
                     break;
                 }
@@ -3414,6 +3449,8 @@ public:
         if (write_style) hard_manager.ar_manager.interaction.stellar_evolution_write_flag = true;
         else hard_manager.ar_manager.interaction.stellar_evolution_write_flag = false;
 #ifdef BSE_BASE
+        hard_manager.ar_manager.interaction.debug_lessmerger_rsun =
+            input_parameters.debug_lessmerger.value;
         if (input_parameters.stellar_evolution_option.value>0) {
             hard_manager.ar_manager.interaction.bse_manager.initial(bse_parameters, print_flag);
             hard_manager.ar_manager.interaction.tide.speed_of_light = hard_manager.ar_manager.interaction.bse_manager.getSpeedOfLight();

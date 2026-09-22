@@ -47,6 +47,10 @@ PeTar_new_version/mobse-interface/petar.mobse
 **/cache/
 *.log
 
+# PeTar examples and local tide tests excluded from this source bundle
+PeTar_new_version/sample/
+PeTar_new_version/tidletest/
+
 # Untracked FDPS planetary-ring benchmark output
 FDPS/sample/c++/planetary_ring/tmp*.dat
 FDPS/sample/c++/planetary_ring/diff.dat

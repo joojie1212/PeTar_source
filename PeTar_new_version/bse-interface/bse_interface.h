@@ -138,6 +138,11 @@ extern "C" {
                  double* epoch, double* tm, double* tphys, double* tphysf, double* dtp, double* z, double* zpars, 
                  double* period, double* ecc, double* bse_event, double* vkick);
 
+    // Per-call tide cutoff, evaluated at each internal BSE evolution step.
+    void evolv2_tides_(int* kw, double* mass, double* mt, double* r, double* lum, double* mc, double* rc, double* menv, double* renv, double* ospin,
+                      double* epoch, double* tm, double* tphys, double* tphysf, double* dtp, double* z, double* zpars,
+                      double* period, double* ecc, double* bse_event, double* vkick, double* tide_ecc_limit);
+
     void star_(int* kw, double* mass, double* mt, double* tm, double* tn, double* tscls, double* lums, double* GB, double* zpars);
 
     void deltat_(int* kw, double* age, double* tm, double* tn, double* tscls, double* dt, double* dtr);
@@ -231,6 +236,11 @@ extern "C" {
     void evolv2_(int* kw, double* mass, double* mt, double* r, double* lum, double* mc, double* rc, double* menv, double* renv, double* ospin,
                  double* epoch, double* tm, double* tphys, double* tphysf, double* dtp, double* z, double* zpars, 
                  double* period, double* ecc, double* bse_event, double* vkick);
+
+    // Per-call tide cutoff, evaluated at each internal BSE evolution step.
+    void evolv2_tides_(int* kw, double* mass, double* mt, double* r, double* lum, double* mc, double* rc, double* menv, double* renv, double* ospin,
+                      double* epoch, double* tm, double* tphys, double* tphysf, double* dtp, double* z, double* zpars,
+                      double* period, double* ecc, double* bse_event, double* vkick, double* tide_ecc_limit);
 
     void star_(int* kw, double* mass, double* mt, double* tm, double* tn, double* tscls, double* lums, double* GB, double* zpars);
 
@@ -1496,10 +1506,11 @@ public:
       @param[in,out] _ecc: eccentricity of binary
       @param[in] _binary_init_type: initial type of binary
       @param[in] _dt_nb: physical time step to evolve [In unit]
+      @param[in] _tide_ecc_limit: suppress only BSE tides above this eccentricity; negative keeps the configured BSE behavior
       \return error flag: -1: error, 0: normal
      */
     int evolveBinary(StarParameter& _star1, StarParameter& _star2, StarParameterOut& _out1, StarParameterOut& _out2, 
-                     double& _semi, double& _period, double& _ecc, BinaryEvent& _bse_event, const int& _binary_init_type, const double _dt_nb) {
+                     double& _semi, double& _period, double& _ecc, BinaryEvent& _bse_event, const int& _binary_init_type, const double _dt_nb, double _tide_ecc_limit = -1.0) {
         double tphys = std::max(_star1.tphys, _star2.tphys);
         double tphysf = _dt_nb*tscale + tphys;
         double dtp=tphysf*100.0+1000.0;
@@ -1573,7 +1584,7 @@ public:
         ospin[1] = _star2.ospin;
         epoch[1] = _star2.epoch;
         //std::cout << "beforeevo:"<<_ecc <<std::endl;
-        evolv2_(kw, m0, mt, r, lum, mc, rc, menv, renv, ospin, epoch, tm, &tphys, &tphysf, &dtp, &z, zpars, &period_days, &_ecc, _bse_event.record[0], vkick);
+        evolv2_tides_(kw, m0, mt, r, lum, mc, rc, menv, renv, ospin, epoch, tm, &tphys, &tphysf, &dtp, &z, zpars, &period_days, &_ecc, _bse_event.record[0], vkick, &_tide_ecc_limit);
         //std::cout << "afterevo:"<<_ecc <<std::endl;
         _period = period_days/year_to_day/tscale;
 

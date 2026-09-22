@@ -1,9 +1,30 @@
 ***
+* Legacy entry: retain unrestricted BSE tides for standalone callers.
       SUBROUTINE evolv2(kstar,mass0,mass,rad,lumin,massc,radc,
      &                  menv,renv,ospin,epoch,tms,
      &                  tphys,tphysf,dtp,z,zpars,tb,ecc,
      &                  bpp,vkick)
       implicit none
+      INTEGER kstar(2)
+      REAL*8 mass0(2),mass(2),rad(2),lumin(2),massc(2),radc(2)
+      REAL*8 menv(2),renv(2),ospin(2),epoch(2),tms(2)
+      REAL*8 tphys,tphysf,dtp,z,zpars(20),tb,ecc,bpp(9,20)
+      REAL*8 vkick(8),tide_ecc_limit
+      tide_ecc_limit = -1.d0
+      CALL evolv2_tides(kstar,mass0,mass,rad,lumin,massc,radc,
+     &                  menv,renv,ospin,epoch,tms,
+     &                  tphys,tphysf,dtp,z,zpars,tb,ecc,
+     &                  bpp,vkick,tide_ecc_limit)
+      END
+***
+      SUBROUTINE evolv2_tides(kstar,mass0,mass,rad,lumin,massc,radc,
+     &                  menv,renv,ospin,epoch,tms,
+     &                  tphys,tphysf,dtp,z,zpars,tb,ecc,
+     &                  bpp,vkick,tide_ecc_limit)
+      implicit none
+* Per-call cutoff: never change the shared FLAGS common block.
+* Negative disables the cutoff; equality belongs to BSE tides.
+      REAL*8 tide_ecc_limit
 ***
 *
 *           B I N A R Y
@@ -544,7 +565,8 @@
 *
             dspint(k) = 0.d0
             if(((kstar(k).le.9.and.rad(k).ge.0.01d0*rol(k)).or.
-     &         (kstar(k).ge.10.and.k.eq.j1)).and.tflag.gt.0)then
+     &         (kstar(k).ge.10.and.k.eq.j1)).and.tflag.gt.0.and.
+     &         (tide_ecc_limit.lt.0.d0.or.ecc.le.tide_ecc_limit))then
 *
                raa2 = (rad(k)/sep)**2
                raa6 = raa2**3
@@ -1958,7 +1980,8 @@
 *
             dspint(k) = 0.d0
             if(((kstar(k).le.9.and.rad(k).ge.0.01d0*rol(k)).or.
-     &         (kstar(k).ge.10.and.k.eq.j1)).and.tflag.gt.0)then
+     &         (kstar(k).ge.10.and.k.eq.j1)).and.tflag.gt.0.and.
+     &         (tide_ecc_limit.lt.0.d0.or.ecc.le.tide_ecc_limit))then
 *
                raa2 = (radx(k)/sep)**2
                raa6 = raa2**3
