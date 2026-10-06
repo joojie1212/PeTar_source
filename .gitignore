@@ -20,6 +20,7 @@
 *.smod
 *.gch
 *.pch
+*.orig
 
 # Python caches
 **/__pycache__/
@@ -39,6 +40,9 @@ PeTar_new_version/bse-interface/petar.get.init.binary
 PeTar_new_version/bse-interface/petar.mobse
 PeTar_new_version/mobse-interface/Makefile
 PeTar_new_version/mobse-interface/petar.mobse
+PeTar_new_version/galpy-interface/petar.galpy
+PeTar_new_version/galpy-interface/petar.galpy.help
+PeTar_new_version/galpy-interface/petar.galpy.pot.movie
 
 # Local simulation results and temporary data
 **/result/
@@ -47,9 +51,16 @@ PeTar_new_version/mobse-interface/petar.mobse
 **/cache/
 *.log
 
-# PeTar examples and local tide tests excluded from this source bundle
-PeTar_new_version/sample/
-PeTar_new_version/tidletest/
+# Examples and local tide tests excluded from this source bundle
+**/sample/
+**/tidletest/
+
+# Machine-local toolchains, dependency caches, diagnostics, and private manuals
+cuda-*/
+.deps/
+diagnostics/
+PeTar服务器部署与启动手册.md
+深圳超算二期用户手册*.pdf
 
 # Untracked FDPS planetary-ring benchmark output
 FDPS/sample/c++/planetary_ring/tmp*.dat

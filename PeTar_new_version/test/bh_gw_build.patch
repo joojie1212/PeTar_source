@@ -1,0 +1,30 @@
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -258,3 +258,11 @@
+ 
++build/petar.bh_gw_dispatch.test: test/bh_gw_dispatch.cxx $(HARD_SRC) src/bh_peters.hpp src/bh_gw_evolution.hpp $(BHMERGER_OBJS) $(BSELIBFILES) |build
++	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
++
++build/petar.bh_peters.test: test/bh_peters.cxx src/bh_peters.hpp |build
++	$(CXX) -std=c++17 -O2 -Wall -Wextra -o $@ $<
++
++$(TARGET): src/bh_peters.hpp src/bh_gw_evolution.hpp
++build/petar.hard.debug: $(BHMERGER_OBJS)
++
+ build/petar.format.transfer: format_transfer.cxx |build
+diff --git a/Makefile.in b/Makefile.in
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -258,3 +258,11 @@
+ 
++build/petar.bh_gw_dispatch.test: test/bh_gw_dispatch.cxx $(HARD_SRC) src/bh_peters.hpp src/bh_gw_evolution.hpp $(BHMERGER_OBJS) $(BSELIBFILES) |build
++	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
++
++build/petar.bh_peters.test: test/bh_peters.cxx src/bh_peters.hpp |build
++	$(CXX) -std=c++17 -O2 -Wall -Wextra -o $@ $<
++
++$(TARGET): src/bh_peters.hpp src/bh_gw_evolution.hpp
++build/petar.hard.debug: $(BHMERGER_OBJS)
++
+ build/petar.format.transfer: format_transfer.cxx |build

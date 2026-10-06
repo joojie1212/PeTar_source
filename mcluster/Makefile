@@ -10,6 +10,10 @@ CC = gcc -O2 -fopenmp -Wall #-ffast-math
 
 #CFLAGS = -L/opt/local/lib/gcc44/ -lgfortran
 CFLAGS = -L/usr/lib/ -lgfortran
+# Opt-in only; also applies to SSE/GPU builds through CC.
+ifeq ($(DARKMATTER),1)
+DMFLAGS = -DDARKMATTER
+endif
 CUFLAGS= -O3 -D WITH_CUDA5
 CUDA_PATH = /usr/local/cuda
 SDK_PATH=$(CUDA_PATH)/samples
@@ -25,20 +29,25 @@ instar.f mix.f rl.f
 
 OBJECTS = $(SOURCE:.f=.o)
 
-mcluster_sse: $(OBJECTS) $(LFLAGS)
-	$(CC) -c main.c -D SSE -lm
+.PHONY: mcluster mcluster_sse mcluster_gpu mcluster_ssegpu test-darkmatter
+
+mcluster_sse: $(OBJECTS) $(LFLAGS) main.c main.h darkmatter.h
+	$(CC) $(DMFLAGS) -c main.c -D SSE -lm
 	$(CC) $(OBJECTS) main.o -o mcluster_sse -lm $(CFLAGS) 
 
-mcluster_ssegpu: $(OBJECTS) $(LFLAGS) gpupot.gpu.o main.c
-	$(CC) -c main.c -D SSE -D GPU -lm -I$(CUDA_PATH)/include
+mcluster_ssegpu: $(OBJECTS) $(LFLAGS) gpupot.gpu.o main.c main.h darkmatter.h
+	$(CC) $(DMFLAGS) -c main.c -D SSE -D GPU -lm -I$(CUDA_PATH)/include
 	$(CC) $(OBJECTS) main.o gpupot.gpu.o  -o mcluster_gpu -L$(CUDA_PATH)/lib64 -lcudart -lstdc++ -lm $(CFLAGS) 
 
-mcluster_gpu: gpupot.gpu.o main.c
-	$(CC) -c main.c -D GPU -I$(CUDA_PATH)/include
+mcluster_gpu: gpupot.gpu.o main.c main.h darkmatter.h
+	$(CC) $(DMFLAGS) -c main.c -D GPU -I$(CUDA_PATH)/include
 	$(CC) main.o gpupot.gpu.o -o mcluster_gpu -L$(CUDA_PATH)/lib64 -lcudart -lstdc++ -lm
 
-mcluster: 
-	$(CC) -o mcluster main.c -lm
+mcluster: main.c main.h darkmatter.h
+	$(CC) $(DMFLAGS) -o mcluster main.c -lm
+
+test-darkmatter:
+	python3 tests/test_darkmatter.py
 
 gpupot.gpu.o: gpupot.gpu.cu cuda_pointer.h
 	nvcc -c $(CUFLAGS) -Xcompiler "-fPIC -O3 -Wall" -I$(SDK_PATH)/common/inc -I. gpupot.gpu.cu 

@@ -10,6 +10,7 @@
 #include "two_body_tide.hpp"
 #ifdef BHMERGER
 #include "bhmerger_output.hpp"
+#include "bh_gw_evolution.hpp"
 #endif
 #ifdef BSE_BASE
 #include "bse_interface.h"
@@ -907,6 +908,14 @@ public:
             auto* p1 = _bin.getLeftMember();
             auto* p2 = _bin.getRightMember();
 
+#if defined(BHMERGER) && defined(BSE_BASE)
+            const bool peters_pair = stellar_evolution_option>0
+                && p1->mass>0 && p2->mass>0
+                && p1->star.kw==14 && p2->star.kw==14;
+#else
+            const bool peters_pair = false;
+#endif
+
             COMM::Vector3<Float> pos_red(p2->pos[0] - p1->pos[0], p2->pos[1] - p1->pos[1], p2->pos[2] - p1->pos[2]);
             COMM::Vector3<Float> vel_red(p2->vel[0] - p1->vel[0], p2->vel[1] - p1->vel[1], p2->vel[2] - p1->vel[2]);
             Float drdv = pos_red * vel_red;
@@ -1131,7 +1140,9 @@ public:
             };
 
             bool check_flag = false;
-            if (stellar_evolution_option>0) {
+            // BH-BH radiation is advanced below. BSE must not also shrink or
+            // merge the same pair, otherwise the GW loss is double counted.
+            if (stellar_evolution_option>0 && !peters_pair) {
                 int binary_type_p1 = static_cast<int>(p1->getBinaryInterruptState());
                 int binary_type_p2 = static_cast<int>(p2->getBinaryInterruptState());
                 int binary_type_init = 0;
@@ -1394,6 +1405,24 @@ public:
             if (_bin_interrupt.status!=AR::InterruptStatus::merge&&_bin_interrupt.status!=AR::InterruptStatus::destroy) {
 
                 auto merge = [&](const Float& dr, const Float& t_peri, const Float& sd_factor) {
+#if defined(BHMERGER) && defined(BSE_BASE)
+                    if (peters_pair) {
+                        const double c=bse_manager.getSpeedOfLight();
+                        const double cutoff=10.0*gravitational_constant
+                            *(p1->mass+p2->mass)/(c*c);
+                        // No route, including a hyperbolic GW impulse, may
+                        // silently delete a widely separated BH component.
+                        if (!(dr<=cutoff*(1.0+1.0e-6))) {
+                            std::cerr<<"BH GW merger rejected outside terminal scale: "
+                                <<p1->id<<" "<<p2->id<<" r="<<dr
+                                <<" cutoff="<<cutoff
+                                <<"; strong encounter requires phase-resolved PN evolution"
+                                <<std::endl;
+                            DATADUMP("dump_bh_gw_unresolved");
+                            abort();
+                        }
+                    }
+#endif
 #if defined(BSE_BASE) && defined(FROZEN_BINARY)
                     thawFrozenPair(*p1, *p2, _bin_interrupt.time_now, "merger");
 #endif
@@ -1479,6 +1508,22 @@ public:
                         if (is_bh_bh_merger_before
                             && ((p1->mass > 0.0) != (p2->mass > 0.0))) {
                             const PtclHard& remnant = (p1->mass > 0.0) ? *p1 : *p2;
+                            // Net particle momentum need not be conserved:
+                            // dP = -dM_GW Vcm + Mf Vk. Log both contributions.
+                            if (stellar_evolution_write_flag) {
+#pragma omp critical(bh_gw_budget)
+                                {
+                                    fout_bse<<"BH_GW_budget "<<std::setprecision(17)
+                                        <<_bin_interrupt.time_now<<" "<<p1->id<<" "<<p2->id
+                                        <<" mass_loss="<<mtot-remnant.mass;
+                                    for (int k=0;k<3;++k)
+                                        fout_bse<<" dP_mass"<<k<<"="
+                                            <<-(mtot-remnant.mass)*vel_cm[k]
+                                            <<" dP_kick"<<k<<"="
+                                            <<remnant.mass*(remnant.vel[k]-vel_cm[k]);
+                                    fout_bse<<std::endl;
+                                }
+                            }
                             bhmerger_output.write(
                                 _bin_interrupt.time_now,
                                 bhmerger_before1,
@@ -1590,7 +1635,10 @@ public:
                     drdv += (p2->pos[k]-p1->pos[k])*(p2->vel[k]-p1->vel[k]);
 
                 // delayed merger
-                if (p1->getBinaryInterruptState()== BinaryInterruptState::collision &&
+                if (peters_pair) {
+                    // Defer to the radiation evolution and compactness gate.
+                }
+                else if (p1->getBinaryInterruptState()== BinaryInterruptState::collision &&
                     p2->getBinaryInterruptState()== BinaryInterruptState::collision &&
                     (p1->time_interrupt<_bin_interrupt.time_now && p2->time_interrupt<_bin_interrupt.time_now) &&
                     (p1->getBinaryPairID()==p2->id||p2->getBinaryPairID()==p1->id)) {
@@ -1674,8 +1722,12 @@ public:
 #ifdef BHMERGER
 #pragma omp critical(bhmerger_check)
 {
+                if (peters_pair) {
+                    if (BHGW::evolve(*this, _bin_interrupt, _bin, modify_return))
+                        merge(_bin.r, 0.0, 1.0);
+                }
                 //BHmerger
-                if(p1->mass>0 && p2->mass>0&&p1->star.kw>=10&&p1->star.kw<15&&p2->star.kw>=10&&p2->star.kw<15){
+                if(!peters_pair && p1->mass>0 && p2->mass>0&&p1->star.kw>=10&&p1->star.kw<15&&p2->star.kw>=10&&p2->star.kw<15){
                     int binary_type_p1 = static_cast<int>(p1->getBinaryInterruptState());
                     int binary_type_p2 = static_cast<int>(p2->getBinaryInterruptState());
                     long long int pair_id1 = p1->getBinaryPairID();

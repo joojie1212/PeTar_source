@@ -187,6 +187,17 @@ AC_ARG_ENABLE([quad],
               [use_quad=no],
               [use_quad=yes])
 
+# collisionless dark matter
+AC_ARG_ENABLE([darkmatter],
+              [AS_HELP_STRING([--enable-darkmatter],
+                              [enable collisionless live dark-matter particles with component-wide softening])],
+              [use_darkmatter=$enableval],
+              [use_darkmatter=no])
+
+AS_IF([test x"$use_darkmatter" != xno],
+      [OPTFLAGS=$OPTFLAGS" -DDARKMATTER"
+       DEBFLAGS=$DEBFLAGS" -DDARKMATTER"])
+
 # cuda
 AC_ARG_ENABLE([cuda],
               [AS_HELP_STRING([--enable-cuda],
@@ -559,6 +570,7 @@ AS_IF([test x"$with_external" == xgalpy],
 AC_MSG_NOTICE([     tidal tensor mode: $with_tidal_tensor])
 AC_MSG_NOTICE([     orbit mode:        $with_orbit])
 AC_MSG_NOTICE([     Using quad:        $use_quad])
+AC_MSG_NOTICE([     Dark matter:       $use_darkmatter])
 AC_MSG_NOTICE([--Compilers:])
 AC_MSG_NOTICE([     C++ compiler:      $CXX])
 AS_IF([test "x$use_c" == xyes],

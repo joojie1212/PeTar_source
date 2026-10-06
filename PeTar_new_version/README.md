@@ -486,6 +486,107 @@ Enabling this option will also compile and install the standalone tools `petar.g
 - `petar.galpy` is a straightforward tool that utilizes the Galpy C interface to compute acceleration and potentials for a particle list using a specified potential model.
 - `petar.galpy.help` is a Python script tool designed to assist users in generating input options for potential models. When designing a specific potential using the Galpy Python interface, this tool also offers a function to convert a Galpy potential instance into an option or a configuration file used by PeTar.
 
+### Collisionless dark matter
+
+Configure PeTar with `--enable-darkmatter` to enable an independently numbered, live collisionless dark-matter component:
+
+```shell
+./configure --enable-darkmatter [other configure options]
+```
+
+Run with a normal stellar snapshot plus a separate dark-matter snapshot:
+
+```shell
+petar --dm-input dm_initial.dat --dm-output-prefix dmdata [options] star_initial.dat
+```
+
+Stellar snapshots remain `data.[index]`; synchronized dark-matter snapshots are `dmdata.[index]`. Star and dark-matter IDs use independent namespaces, so both components may use IDs `1...N`. Restart files must have identical file IDs and times. The dark-matter header is `fid n time eps`, so the component-wide Plummer softening is preserved by restart snapshots. Each ASCII dark-matter row has 13 columns: `mass x y z vx vy vz id ax ay az pot_dm pot_star`. Dark matter uses component-wide Plummer softening, a tree-step leapfrog, and never enters the neighbour, Hermite, SDAR, collision, or SSE/BSE paths.
+
+Interactions involving dark matter now use two FDPS distributed monopole trees,
+controlled by `-T`, with MPI LET exchange and OpenMP traversal. Both components
+participate in domain sampling and particle exchange. The DM-source tree evaluates
+DM self-gravity and DM-to-star forces together. The stellar-source tree evaluates
+only star-to-DM forces. It is separate from `tree_soft`: that tree's LET and target
+groups cover stellar targets, and cannot simply be reused for different DM
+targets. Thus stellar source construction is repeated, but star-star forces are
+not evaluated a second time. Massless target probes extend LET coverage; zero-mass
+cells use a finite, guarded monopole moment. There is no per-step all-gather of
+source particles (the initial DM ID uniqueness check still gathers IDs).
+
+On x86 SIMD builds, both DM particle and monopole interactions use the existing
+Phantom-GRAPE CPU SIMD kernels, with the DM softening and zero cutoff radius.
+Other builds use a scalar CPU kernel. `--enable-simd-64` is recommended when
+accurate self-potential subtraction is important. DM force calculations do not
+use GPU kernels. For example, configure with `--enable-darkmatter --with-mpi=yes
+--enable-simd-64` and omit `--enable-cuda` for a CPU-only build.
+
+Energy bookkeeping separates the components: `data.status` reports stellar
+kinetic and star-star potential energy (plus any separately configured external
+potential), while `dmdata.status` reports `K_dm`, `U_dm_dm`, and the **full**
+`U_star_dm = sum(m_dm * pot_star)`, without a factor of 1/2. Only self-component
+energies use 1/2. The combined energy is
+`E_star + K_dm + U_dm_dm + U_star_dm + U_dm_ext`;
+the stellar energy error alone is not a conservation diagnostic for the coupled
+system. Snapshot potentials still include the DM contribution needed by dynamics.
+New DM status headers contain `stellar_status_excludes_cross=1`. The sample energy
+plotter recognizes both this convention and archived outputs using the old half
+cross term. Appending new-format bookkeeping to an old-format status file is
+rejected; restart into a new output directory with `-a 0` instead.
+
+#### Live dark matter with Galpy
+
+Combine `--enable-darkmatter --with-external=galpy` when configuring. Both
+stars and DM then feel the external field. The DM external acceleration is
+cached before the DM trees and added once after tree writeback, before the
+leapfrog kick. Moving potential sets receive the reaction from both species;
+particle reactions are thread-safe and summed across MPI ranks.
+
+The two species use the **same moving frame**. Stellar snapshot headers store
+the common position and velocity offsets; add these offsets to either species
+to recover inertial coordinates. Both species receive every frame-position
+and frame-velocity correction. DM snapshots retain their four-field header,
+13-column ASCII rows, and original binary record layout. External force and
+potential are derived data, recomputed from the restored field on restart.
+
+`dmdata.status` now has eight columns:
+
+```text
+time N_dm M_dm K_dm U_dm_dm U_star_dm E_dm_and_cross U_dm_ext
+```
+
+`K_dm` uses inertial velocities. `U_dm_ext = sum(m_dm*Phi_ext)` has no factor
+of 1/2, and is included in `E_dm_and_cross`. The header marker
+`dm_external_energy=1` identifies this convention. It is written even with
+`-w 3` (status-only output). The sample energy plotter includes the new term.
+For a prescribed time-varying field, particle energy is not conserved; for a
+moving field, the field object's energy must also be included in a conservation
+test.
+
+Each paired snapshot saves `data.N.galpy.state`, containing the current
+potential sets, positions, velocities, accelerations, changing arguments and
+their epoch, including potentials specified via `--galpy-type-arg`. Retain
+`data.N.galpy` too when present: it is the existing model-specific restart
+state. Retain `input.par.galpy` (unit scales and configuration options) and the
+original `--galpy-conf-file` schedule for future time-dependent updates.
+Restart with the matching stellar and DM snapshots; the Galpy state is found
+beside the **stellar** snapshot automatically. For example, in a fresh directory
+after copying `input.par` and `input.par.galpy` from the original run:
+
+```shell
+petar -p input.par -a 0 -t 200 --dm-input /path/to/run/dmdata.10 /path/to/run/data.10
+```
+
+Use an absolute path for any Galpy schedule so it remains available on restart.
+Old static-potential snapshots without `.galpy.state` still require the original
+potential options. Input stellar files must match the Galpy build: a nine-field
+header (including frame offsets) and an extra `pot_ext` column before `n_ngb`.
+The external-off McLuster stellar output cannot be read unchanged by that build.
+If preparing files through `petar.init`, supply its expected seven-column input,
+not an already expanded PeTar snapshot. Keep DM positions/velocities in the same
+frame as the prepared stellar positions/velocities.
+
+Regression instructions: [test/darkmatter_galpy.md](test/darkmatter_galpy.md).
+
 ### Combining Multiple Options
 
 When combining multiple options, they should be used together, as shown in the example below:

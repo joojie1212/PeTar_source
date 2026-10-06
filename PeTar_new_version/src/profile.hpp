@@ -317,8 +317,13 @@ public:
 	Tprofile hard_isolated;
 	Tprofile hard_connected;
     Tprofile hard_interrupt;
-	Tprofile tree_nb;
+    Tprofile tree_nb;
     Tprofile tree_soft;
+#ifdef DARKMATTER
+    Tprofile dm_force;
+    Tprofile dm_source_tree;
+    Tprofile star_dm_tree;
+#endif
     Tprofile force_correct;
     Tprofile kick;
 	Tprofile search_cluster;
@@ -337,6 +342,11 @@ public:
                   hard_interrupt(Tprofile("PP_intrpt* ")),
                   tree_nb       (Tprofile("Tree_NB    ")),
                   tree_soft     (Tprofile("Tree_Force ")),
+#ifdef DARKMATTER
+                  dm_force      (Tprofile("DM_Total   ")),
+                  dm_source_tree(Tprofile("DM_Tree    ")),
+                  star_dm_tree  (Tprofile("StarDM_Tree")),
+#endif
                   force_correct (Tprofile("Force_corr ")),
                   kick          (Tprofile("Kick       ")),
                   search_cluster(Tprofile("FindCluster")),
@@ -346,7 +356,11 @@ public:
                   output        (Tprofile("Output     ")),
                   status        (Tprofile("Status     ")),
                   other         (Tprofile("Other      ")),
+#ifdef DARKMATTER
+                  n_profile(19) {}
+#else
                   n_profile(16) {}
+#endif
 
 	void print(std::ostream & fout, const PS::F64 time_sys, const PS::S64 n_loop=1){
         fout<<"Time: "<<time_sys<<std::endl;

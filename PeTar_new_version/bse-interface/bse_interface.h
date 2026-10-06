@@ -1812,7 +1812,9 @@ public:
                 && std::isfinite(spin_direction_norm)
                 && spin_direction_norm > 0.0;
             for (int k=0; k<3; k++) {
-                vkick[k] += remnant_zj.vkick_nor[k];
+                // A BH-BH fit supplies the full GW recoil. Do not add a
+                // second natal/BSE kick on top of the same merger.
+                vkick[k] = remnant_zj.vkick_nor[k];
                 if (remnant_spin_valid) {
                     const double remnant_spin_component =
                         remnant_zj.spindirection_nor[k]

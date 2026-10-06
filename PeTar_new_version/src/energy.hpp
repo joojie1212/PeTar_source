@@ -1,5 +1,16 @@
 #pragma once
 
+// Stellar status reports star-star potential only. The full star-DM cross
+// energy is reported once by writeDarkMatterStatus(), without a factor 1/2.
+template<class T> inline PS::F64 stellarEnergyPotential(const T& p) {
+    return p.pot_tot;
+}
+#ifdef DARKMATTER
+inline PS::F64 stellarEnergyPotential(const FPSoft& p) {
+    return p.pot_tot-p.pot_dm;
+}
+#endif
+
 //! class for collecting and calculating the energy and angular momentum of the system
 class EnergyAndMomentum{
 public:
@@ -224,9 +235,9 @@ public:
             if (_vel_offset!=NULL) vi += *_vel_offset;
 
 #ifdef EXTERNAL_POT_IN_PTCL
-            epot += 0.5 * mi * (_particles[i].pot_tot + _particles[i].pot_ext);
+            epot += 0.5 * mi * (stellarEnergyPotential(_particles[i]) + _particles[i].pot_ext);
 #else
-            epot += 0.5 * mi * _particles[i].pot_tot;
+            epot += 0.5 * mi * stellarEnergyPotential(_particles[i]);
 #endif
             ekin += 0.5 * mi * vi * vi;
             L += pi ^ (mi*vi);
@@ -262,9 +273,9 @@ public:
             PS::F64 mi = _particles[i].mass;
             PS::F64vec vi = _particles[i].vel;
 #ifdef EXTERNAL_POT_IN_PTCL
-            epot += 0.5 * mi * (_particles[i].pot_tot + _particles[i].pot_ext);
+            epot += 0.5 * mi * (stellarEnergyPotential(_particles[i]) + _particles[i].pot_ext);
 #else
-            epot += 0.5 * mi * _particles[i].pot_tot;
+            epot += 0.5 * mi * stellarEnergyPotential(_particles[i]);
 #endif
             ekin += 0.5 * mi * vi * vi;
             L += _particles[i].pos ^ (mi*vi);
@@ -346,4 +357,3 @@ public:
     }
     */
 };
-

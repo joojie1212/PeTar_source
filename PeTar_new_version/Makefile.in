@@ -256,6 +256,12 @@ HARD_MT_FLAGS += -D AR_TTL -D AR_SLOWDOWN_TREE -D AR_SLOWDOWN_TIMESCALE -D HARD_
 
 HARD_SRC= io.hpp ptcl.hpp particle_base.hpp hard_assert.hpp cluster_list.hpp hard.hpp hard_ptcl.hpp hermite_interaction.hpp hermite_information.hpp hermite_perturber.hpp ar_interaction.hpp ar_perturber.hpp search_group_candidate.hpp artificial_particles.hpp stability.hpp soft_ptcl.hpp static_variables.hpp tidal_tensor.hpp orbit_sampling.hpp pseudoparticle_multipole.hpp
 
+build/petar.bh_gw_dispatch.test: test/bh_gw_dispatch.cxx $(HARD_SRC) src/bh_peters.hpp src/bh_gw_evolution.hpp $(BHMERGER_OBJS) $(BSELIBFILES) |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
+
+build/petar.bh_peters.test: test/bh_peters.cxx src/bh_peters.hpp |build
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -o $@ $<
+
 build/petar.format.transfer: format_transfer.cxx |build
 	$(CXX) $(PETAR_INCLUDE) $(OPTFLAGS) $(CXXFLAGS) $(MT_FLAGS) -o $@ $< $(CXXLIBS)
 
@@ -269,6 +275,9 @@ build/petar.tide_collision.test: test/tide_collision.cxx $(HARD_SRC) two_body_ti
 # Compile-time isolated regression for the optional frozen-binary policy.
 build/petar.frozen_binary.test: test/frozen_binary.cxx $(HARD_SRC) two_body_tide.hpp $(BSELIBFILES) |build
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -D FROZEN_BINARY -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
+
+$(TARGET): src/bh_peters.hpp src/bh_gw_evolution.hpp
+build/petar.hard.debug: $(BHMERGER_OBJS)
 
 build/petar.hard.test: hard_test.cxx $(HARD_SRC) |build
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(HARD_MT_FLAGS) $(HARD_DEBFLAGS) -o $@ $< $(CXXLIBS)

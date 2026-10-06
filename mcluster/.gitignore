@@ -11,3 +11,7 @@ stuff/
 papers/
 testing/
 test*
+!/tests/
+!/tests/*.c
+!/tests/*.cxx
+!/tests/*.py

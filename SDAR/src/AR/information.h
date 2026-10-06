@@ -94,25 +94,12 @@ namespace AR {
         Float r_break_crit;    // group break radius criterion
         FixStepOption fix_step_option; ///> fix step option for integration
         COMM::List<BinaryTree<Tparticle>> binarytree; ///> a list of binary tree that contain the hierarchical orbital parameters of the particle group.
-#ifdef BHMERGER
-        // Origin of the parent frame in the simulation's global coordinates.
-        // For a top-level AR system these remain zero. For an AR group nested
-        // in a Hermite hard cluster, they contain that cluster's initial CM.
-        Float global_frame_pos[3];
-        Float global_frame_vel[3];
-#endif
 #ifdef AR_DEBUG_DUMP
         bool dump_flag; ///> for debuging dump
 #endif
 
         //! initializer, set ds to zero, fix_step_option to none
         Information(): ds(0.0), time_offset(0.0), r_break_crit(-1.0), fix_step_option(AR::FixStepOption::none), binarytree() {
-#ifdef BHMERGER
-            for (int k=0; k<3; k++) {
-                global_frame_pos[k] = 0.0;
-                global_frame_vel[k] = 0.0;
-            }
-#endif
 #ifdef AR_DEBUG_DUMP
             dump_flag = false;
 #endif

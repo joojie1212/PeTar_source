@@ -1279,16 +1279,6 @@ namespace H4{
                 // shift to c.m. frame
                 group_new.particles.shiftToCenterOfMassFrame();
 
-#ifdef BHMERGER
-                // The Hermite particle system is itself stored relative to the
-                // hard-cluster CM. Pass that parent-frame CM to the nested AR
-                // group so merger diagnostics can reconstruct global vectors.
-                for (int d=0; d<3; d++) {
-                    group_new.info.global_frame_pos[d] = particles.cm.pos[d];
-                    group_new.info.global_frame_vel[d] = particles.cm.vel[d];
-                }
-#endif
-
                 // get binarytree
                 group_new.info.generateBinaryTree(group_new.particles,ar_manager->interaction.gravitational_constant);
 

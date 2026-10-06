@@ -2102,25 +2102,7 @@ namespace AR {
                         //for (int i=0; i<n_particle; i++) {
                         //    epert += force_[i].pot_pert*particles[i].mass;
                         //}
-#ifdef BHMERGER
-                        // Members are stored in the AR center-of-mass frame.
-                        // Reconstruct the current global CM of this AR system.
-                        Float global_pos_offset[3];
-                        Float global_vel_offset[3];
-                        for (int k=0; k<3; k++) {
-                            global_pos_offset[k] =
-                                info.global_frame_pos[k]
-                                + particles.cm.pos[k]
-                                + (time_ - particles.cm.time) * particles.cm.vel[k];
-                            global_vel_offset[k] =
-                                info.global_frame_vel[k] + particles.cm.vel[k];
-                        }
-                        manager->interaction.modifyAndInterruptIter(
-                            bin_interrupt, bin_root,
-                            global_pos_offset, global_vel_offset);
-#else
                         manager->interaction.modifyAndInterruptIter(bin_interrupt, bin_root);
-#endif
                         //InterruptBinary<Tparticle>* bin_intr_ptr = &bin_interrupt;
                         //bin_intr_ptr = bin_root.processRootIter(bin_intr_ptr, Tmethod::modifyAndInterruptIter);
                         ASSERT(bin_interrupt.checkParams());

@@ -22,6 +22,10 @@ ahwkuepper@gmail.com
 
 COMPILING THE CODE:
 
+Optional live NFW dark-matter initial conditions for PeTar:
+  make mcluster DARKMATTER=1
+See DARKMATTER.md for the parameters, joint-potential inversion and paired files.
+
 For compiling the basic McLuster version use the MAKEFILE by 
 typing
 

@@ -1243,7 +1243,10 @@ def eval_deltaphi(deltachi, kappa, r, chieff, q, chi1, chi2, cyclesign=1):
 
     cyclesign = np.atleast_1d(cyclesign)
     cosdeltaphi = eval_cosdeltaphi(deltachi, kappa, r, chieff, q, chi1, chi2)
-    deltaphi = np.sign(cyclesign)*np.arccos(cosdeltaphi)
+    # Roundoff becomes strongly amplified when either spin is nearly zero:
+    # eval_cosdeltaphi can then miss the physical interval by ~1e-3 even for
+    # otherwise valid configurations. Keep arccos on its physical domain.
+    deltaphi = np.sign(cyclesign)*np.arccos(np.clip(cosdeltaphi, -1.0, 1.0))
 
     return deltaphi
 

@@ -22,6 +22,9 @@ int main(int argc, char *argv[]){
     auto& inp = petar.input_parameters;
 
     if (inp.fname_inp.value=="__Plummer") petar.generatePlummer();
+#ifdef DARKMATTER
+    if (inp.fname_inp.value=="__Plummer") petar.readDarkMatterFromFile();
+#endif
     //else if (inp.fname_inp.value!="__KeplerDisk") petar.generateKeplerDisk();
     else petar.readDataFromFile();
 

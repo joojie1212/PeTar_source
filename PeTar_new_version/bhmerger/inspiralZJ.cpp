@@ -346,6 +346,8 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
     Inspiraloutputs.chi1 = chi1;
     Inspiraloutputs.chi2 = chi2;
     Inspiraloutputs.m = m;
+    const InspiralParameters encounter_outputs = Inspiraloutputs;
+    bool inspiral_evolution_valid = false;
 
     // ---- 导入模块 ----
     PyObject *pModule = getPythonModule();
@@ -354,7 +356,9 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
     // =====================================================
     // 调用 Python 函数 inspiral_precav
     // =====================================================
-    if (is_bound_inspiral) {
+    // Peters may already have reached the 10 GM/c^2 fitting boundary.
+    // Never evolve the Python inspiral backwards from a smaller separation.
+    if (is_bound_inspiral && a0 > 10.0*(1.0+1.0e-8)) {
         PyObject *pFunc = PyObject_GetAttrString(pModule, "inspiral_precav");
         if (!pFunc || !PyCallable_Check(pFunc)) {
             PyErr_Print(); fprintf(stderr, "Cannot find inspiral_precav\n");
@@ -382,10 +386,13 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         Py_DECREF(a_array);
 
         if (!result) {
-            PyErr_Print(); fprintf(stderr, "Call inspiral_precav failed\n");
-            CAL_REMNANT_RETURN(false);
+            PyErr_Print();
+            std::fprintf(stderr,
+                         "Call inspiral_precav failed; using encounter-time "
+                         "spin configuration for remnant fit\n");
+            Inspiraloutputs = encounter_outputs;
         }
-
+        else {
         // 从结果字典中提取需要的值
         PyObject *theta1_arr = PyDict_GetItemString(result, "theta1");
         PyObject *theta2_arr = PyDict_GetItemString(result, "theta2"); 
@@ -419,8 +426,24 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         Inspiraloutputs.m      = m;
 
         Py_DECREF(result);
+        inspiral_evolution_valid =
+            std::isfinite(Inspiraloutputs.theta1)
+            && std::isfinite(Inspiraloutputs.theta2)
+            && std::isfinite(Inspiraloutputs.deltaphi)
+            && std::isfinite(Inspiraloutputs.a)
+            && std::isfinite(Inspiraloutputs.e)
+            && std::isfinite(Inspiraloutputs.q)
+            && std::isfinite(Inspiraloutputs.chi1)
+            && std::isfinite(Inspiraloutputs.chi2);
+        if (!inspiral_evolution_valid) {
+            std::fprintf(stderr,
+                         "Non-finite inspiral output; using encounter-time "
+                         "spin configuration for remnant fit\n");
+            Inspiraloutputs = encounter_outputs;
+        }
+        }
     }
-    else {
+    if (!is_bound_inspiral || !inspiral_evolution_valid) {
         // ================= BHMERGER-ZJ: hyperbolic/direct merger path =================
         // inspiral_precav() supports only 0 <= e < 1. Keep the encounter-time
         // spin angles and proceed directly to the remnant fits for e >= 1.
@@ -510,7 +533,7 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
     // =====================================================
     // remnantspindirection
     // =====================================================
-    if (is_bound_inspiral) {
+    if (is_bound_inspiral && inspiral_evolution_valid) {
         PyObject *pFunc = PyObject_GetAttrString(pModule, "remnantspindirection");
         if (!pFunc || !PyCallable_Check(pFunc)) {
             PyErr_Print(); fprintf(stderr, "Cannot find remnantspindirection\n");

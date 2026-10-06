@@ -15,6 +15,75 @@ runtime results, caches, and machine-local editor settings.
 PeTar's default configure paths expect `FDPS` and `SDAR` beside the PeTar
 directory, matching this layout.
 
+The repository intentionally does not contain any directory named `sample` or
+`tidletest`. Compiler products, simulation output, nested Git metadata, the
+machine-local CUDA toolkit, and cached third-party binary packages are also
+excluded. CUDA, MPI, Python/NumPy, Galpy, and system compiler runtimes must be
+provided by the target machine.
+
+## Added features in this snapshot
+
+### Live collisionless dark matter
+
+Configure with `--enable-darkmatter` to add an independently numbered live
+dark-matter component. A run accepts the normal stellar snapshot plus a second
+snapshot through `--dm-input`; synchronized outputs use the configurable
+`--dm-output-prefix` (default `dmdata`). Stellar and dark-matter IDs occupy
+separate namespaces, and paired restart snapshots must have the same snapshot
+ID and time.
+
+Dark matter uses a component-wide Plummer softening length and a tree-step
+leapfrog. It participates in domain decomposition and MPI particle exchange,
+but never enters neighbour/Hermite/SDAR, collision, or SSE/BSE paths. Two FDPS
+distributed monopole trees evaluate DM self-gravity, DM-to-star forces, and
+star-to-DM forces without a per-step all-gather. x86 builds can use the existing
+Phantom-GRAPE SIMD kernels; `--enable-simd-64` is recommended when accurate
+self-potential subtraction matters. CUDA kernels are not used for the DM force.
+
+The implementation includes:
+
+- independent stellar and DM snapshots with ASCII/binary restart support;
+- complete star-star, DM-DM, and star-DM potential-energy accounting;
+- consistent Galpy forces, moving-potential reactions, reference-frame shifts,
+  and restart state shared by both particle components;
+- MPI/OpenMP distributed-tree regression tests against direct summation and an
+  independent Galpy trajectory integration.
+
+### Black-hole inspiral, merger, and remnant placement
+
+Configure with `--with-interrupt=bse --enable-bhmerger`. The build embeds
+Python/NumPy and the bundled `bhmerger/precession-master` remnant-fit code.
+Python is initialized once around the PeTar integration loop, rather than once
+per merger, and merger calls and output are protected for OpenMP/MPI use.
+
+For a bound BH-BH leaf pair, PeTar applies orbit-averaged Peters evolution to
+the current osculating semi-major axis and eccentricity while SDAR continues to
+handle conservative dynamics and perturbations. The remaining inspiral time is
+recomputed at every callback, so widening postpones the merger and unbinding
+cancels the bound inspiral clock. Hyperbolic encounters continue to use the
+encounter prescription. The terminal fitting boundary is
+`a(1+e) <= 10 G(m1+m2)/c^2`; an attempted bound merger outside that scale is
+rejected and dumped instead of silently coalescing.
+
+The BH merger position/velocity handling differs materially from the upstream
+path:
+
+- the remnant is placed at the pre-merger binary centre-of-mass position;
+- its velocity is the original centre-of-mass velocity plus the fitted recoil
+  kick, and the fitted kick replaces rather than adds to a BSE kick;
+- GW mass loss and kick momentum are accounted for separately as
+  `-deltaM * Vcm + Mf * Vk`;
+- remnant mass, Kerr-spin magnitude/direction, and recoil are validated before
+  being applied, with the spin retained for hierarchical mergers;
+- each accepted event records both progenitors, their pre-merger positions,
+  velocities and spins, the binary orbit, and the final remnant in a shared
+  `*.bhmerger` output protected by process and thread locks.
+
+This is an operator-split, orbit-averaged prescription, not phase-resolved PN
+integration or a waveform model. The terminal timing, timestep convergence,
+and long-duration production accuracy remain modeling limitations documented
+under `PeTar_new_version/test/`.
+
 ## Local stability fixes
 
 The current PeTar source includes fixes for three state-consistency and
@@ -87,8 +156,54 @@ changes:
 
 The component directories retain their original license files and attribution.
 
+## Difference from the GitHub PeTar source
+
+This comparison was refreshed on 2026-10-06 against
+`git@github.com:joojie1212/PeTar.git` branch `master`, commit
+`45d1dce6d9bc6ed0e135d5ab7d0be385d9f14278` (`added merger part`). The local
+PeTar working tree started from `b2ce49f8308348dc44a6603d92caa0e0b3c9d846`
+and includes later uncommitted development. It is therefore a maintained
+research snapshot, not a byte-for-byte mirror or a release tag.
+
+Relative to that GitHub commit, this bundle adds or changes:
+
+- the live, distributed dark-matter component (`darkmatter.hpp`,
+  `darkmatter_force.hpp`, configure/build plumbing, I/O, restart, energy,
+  Galpy, and regression tests);
+- bound BH-BH Peters evolution, terminal-scale enforcement, clock
+  invalidation/recomputation, CM-preserving remnant placement, recoil/mass-loss
+  momentum accounting, persistent remnant spin, and structured merger output;
+- safer embedded-Python lifecycle and stronger validation of remnant-fit return
+  values, including a direct/hyperbolic merger path;
+- physical instantaneous-contact gating for ordinary-star BSE mergers and the
+  configurable `--debug_lessmerger[=Rsun]` collision radius;
+- consistent rebuilding of post-BSE orbital state, hyperbolic-GW eccentricity
+  fixes, and serialized merger diagnostics;
+- the optional reversible frozen-binary optimization and its safety checks;
+- additional focused tests and validation notes under
+  `PeTar_new_version/test/`.
+
+The snapshot also omits generated Doxygen HTML, all `sample` and `tidletest`
+trees, build products, and run data. FDPS, SDAR, and mcluster are committed as
+ordinary source directories rather than Git submodules so a clone contains the
+required dependency source immediately.
+
 ## Building PeTar
 
 From `PeTar_new_version`, configure and build using the options appropriate for
 the target machine. The adjacent dependency directories are found by the
 project's default configuration paths.
+
+For a CPU build with BSE, BH mergers, and live dark matter, a representative
+configuration is:
+
+```sh
+cd PeTar_new_version
+./configure --prefix="$HOME" --with-interrupt=bse \
+  --enable-bhmerger --enable-darkmatter --with-mpi=yes
+make -j
+make install
+```
+
+Python development headers and NumPy are required for `--enable-bhmerger`;
+MPI and a Fortran compiler are required by this example and BSE respectively.

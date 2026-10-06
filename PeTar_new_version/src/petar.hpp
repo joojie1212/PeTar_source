@@ -73,6 +73,9 @@ int MPI_Irecv(void* buffer, int count, MPI_Datatype datatype, int dest, int tag,
 #include"hard.hpp"
 #include"io.hpp"
 #include"status.hpp"
+#ifdef DARKMATTER
+#include"darkmatter.hpp"
+#endif
 #include"particle_distribution_generator.hpp"
 #include"domain.hpp"
 #include"cluster_list.hpp"
@@ -153,6 +156,10 @@ public:
     IOParams<std::string> fname_snp;
     IOParams<std::string> fname_par;
     IOParams<std::string> fname_inp;
+#ifdef DARKMATTER
+    IOParams<std::string> fname_dm_inp;
+    IOParams<std::string> fname_dm_snp;
+#endif
 
     // flag
     bool print_flag; 
@@ -233,6 +240,10 @@ public:
                      fname_snp(input_par_store, "data", "f", "Prefix of filenames for output data: [prefix].**"),
                      fname_par(input_par_store, "input.par", "p", "Input parameter file (this option should be used first before any other options)"),
                      fname_inp(input_par_store, "__NONE__", "snap-filename", "Input data file", NULL, false),
+#ifdef DARKMATTER
+                     fname_dm_inp(input_par_store, "__NONE__", "dm-input", "DARKMATTER input snapshot"),
+                     fname_dm_snp(input_par_store, "dmdata", "dm-output-prefix", "DARKMATTER output snapshot prefix"),
+#endif
                      print_flag(false), update_changeover_flag(false), update_rsearch_flag(false) {}
 
     
@@ -284,6 +295,10 @@ public:
             {adjust_group_write_option.key,   required_argument, &petar_flag, 24},
 #endif            
             {nstep_dt_soft_kepler.key,  required_argument, &petar_flag, 25},
+#ifdef DARKMATTER
+            {fname_dm_inp.key,          required_argument, &petar_flag, 27},
+            {fname_dm_snp.key,          required_argument, &petar_flag, 28},
+#endif
             {"help",                  no_argument, 0, 'h'},        
             {0,0,0,0}
         };
@@ -453,6 +468,18 @@ public:
                     if(print_flag) nstep_dt_soft_kepler.print(std::cout);
                     opt_used += 2;
                     break;
+#ifdef DARKMATTER
+                case 27:
+                    fname_dm_inp.value = optarg;
+                    if(print_flag) fname_dm_inp.print(std::cout);
+                    opt_used += 2;
+                    break;
+                case 28:
+                    fname_dm_snp.value = optarg;
+                    if(print_flag) fname_dm_snp.print(std::cout);
+                    opt_used += 2;
+                    break;
+#endif
 #ifdef BSE_BASE
                 case 26: {
                     // Also accept a space before the value of this optional argument.
@@ -714,6 +741,14 @@ public:
     // file system
     FileHeader file_header;
     SystemSoft system_soft;
+#ifdef DARKMATTER
+    typedef PS::ParticleSystem<DarkMatterParticle> SystemDarkMatter;
+    DarkMatterFileHeader dm_file_header;
+    SystemDarkMatter system_dm;
+    std::ofstream fstatus_dm;
+    PS::ParticleSystem<DMTreeParticle> dm_tree_particles;
+    DMTree dm_source_tree, dm_stellar_source_tree;
+#endif
 
     // particle index map
     std::map<PS::S64, PS::S32> id_adr_map;
@@ -786,7 +821,11 @@ public:
 #endif
         stat(), fstatus(), time_kick(0.0),
         escaper(), fesc(),
-        file_header(), system_soft(), id_adr_map(),
+        file_header(), system_soft(),
+#ifdef DARKMATTER
+        dm_file_header(), system_dm(), fstatus_dm(),
+#endif
+        id_adr_map(),
         n_loop(0), domain_decompose_weight(1.0), dinfo(), pos_domain(NULL), 
         dt_manager(),
         tree_nb(), tree_soft(), 
@@ -930,6 +969,180 @@ public:
         profile.create_group.end();
 #endif
     }
+
+#ifdef DARKMATTER
+    bool darkMatterEnabled() const {
+        return input_parameters.fname_dm_inp.value != "__NONE__";
+    }
+
+    void readDarkMatterFromFile() {
+        if (!darkMatterEnabled()) return;
+        const PS::S32 fmt = input_parameters.data_format.value;
+        const char* name = input_parameters.fname_dm_inp.value.c_str();
+        if (fmt==1 || fmt==2)
+            system_dm.readParticleAscii(name, dm_file_header);
+        else
+            system_dm.readParticleBinary(name, dm_file_header);
+        PS::Comm::broadcast(&dm_file_header, 1, 0);
+
+        const PS::F64 scale = std::max(PS::F64(1.0), std::abs(file_header.time));
+        if (dm_file_header.nfile != file_header.nfile
+            || std::abs(dm_file_header.time-file_header.time) > 1.0e-12*scale) {
+            std::cerr << "Error: star and DARKMATTER snapshots are not a matching pair: "
+                      << "star(fid,time)=(" << file_header.nfile << "," << file_header.time
+                      << "), dm(fid,time)=(" << dm_file_header.nfile << ","
+                      << dm_file_header.time << ")" << std::endl;
+            std::abort();
+        }
+
+        const PS::S32 nloc = system_dm.getNumberOfParticleLocal();
+        std::vector<PS::S64> ids_local(nloc), ids_global;
+        for (PS::S32 i=0; i<nloc; ++i) ids_local[i] = system_dm[i].id;
+        darkMatterAllGather(ids_local.data(), nloc, ids_global);
+        std::sort(ids_global.begin(), ids_global.end());
+        for (std::size_t i=1; i<ids_global.size(); ++i) {
+            if (ids_global[i] == ids_global[i-1]) {
+                std::cerr << "Error: duplicate DARKMATTER id " << ids_global[i] << std::endl;
+                std::abort();
+            }
+        }
+        if (input_parameters.print_flag)
+            std::cout << "----- Reading DARKMATTER file: " << name << " -----\n"
+                      << "Number of DARKMATTER particles = " << ids_global.size() << "\n"
+                      << "Time = " << dm_file_header.time << "\n"
+                      << "Softening = " << dm_file_header.eps << std::endl;
+    }
+
+    void writeDarkMatterStatus() {
+        if (!darkMatterEnabled()) return;
+        PS::F64 n=0.0, m=0.0, kin=0.0, udd=0.0, usd=0.0, uext=0.0;
+        const PS::S32 nloc = system_dm.getNumberOfParticleLocal();
+        for (PS::S32 i=0; i<nloc; ++i) {
+            const DarkMatterParticle& p = system_dm[i];
+            n += 1.0;
+            m += p.mass;
+            PS::F64vec vel = p.vel;
+#ifdef RECORD_CM_IN_HEADER
+            vel += stat.pcm.vel;
+#endif
+            kin += 0.5*p.mass*(vel*vel);
+            udd += 0.5*p.mass*p.pot_dm;
+            usd += p.mass*p.pot_star;
+#ifdef GALPY
+            uext += p.mass*p.pot_ext;
+#endif
+        }
+        n=PS::Comm::getSum(n); m=PS::Comm::getSum(m);
+        kin=PS::Comm::getSum(kin); udd=PS::Comm::getSum(udd);
+        usd=PS::Comm::getSum(usd);
+        uext=PS::Comm::getSum(uext);
+        if (my_rank==0 && fstatus_dm.is_open()) fstatus_dm << stat.time << " " << static_cast<PS::S64>(n)
+            << " " << m << " " << kin << " " << udd << " " << usd
+            << " " << (kin+udd+usd+uext) << " " << uext << std::endl;
+    }
+
+    void writeDarkMatterSnapshot() {
+        if (!darkMatterEnabled() || input_parameters.write_style.value != 1) return;
+        dm_file_header.nfile = file_header.nfile;
+        dm_file_header.n_body = system_dm.getNumberOfParticleGlobal();
+        dm_file_header.time = file_header.time;
+        const std::string name = input_parameters.fname_dm_snp.value + "."
+                               + std::to_string(dm_file_header.nfile);
+        if (input_parameters.data_format.value==1 || input_parameters.data_format.value==3)
+            system_dm.writeParticleAscii(name.c_str(), dm_file_header);
+        else
+            system_dm.writeParticleBinary(name.c_str(), dm_file_header);
+    }
+
+    void darkMatterForce() {
+        if (!darkMatterEnabled()) return;
+#ifdef PROFILE
+        profile.dm_force.start();
+#endif
+        const PS::F64 G = input_parameters.gravitational_constant.value;
+        const PS::F64 eps = dm_file_header.eps;
+        const PS::S32 ndm = system_dm.getNumberOfParticleLocal();
+        const PS::S32 nstar = system_soft.getNumberOfParticleLocal();
+        dm_tree_particles.setNumberOfParticleLocal(nstar+ndm);
+        // Include every local stellar evaluation point, including tidal probes.
+        // Massless probes extend the LET target extent without sourcing force.
+        for (PS::S32 i=0; i<nstar; ++i) {
+            auto& p=dm_tree_particles[i];
+            p.pos=system_soft[i].pos; p.mass=0.0; p.active=true;
+        }
+        for (PS::S32 i=0; i<ndm; ++i) {
+            auto& p=dm_tree_particles[nstar+i];
+            p.pos=system_dm[i].pos; p.mass=system_dm[i].mass; p.active=true;
+        }
+        const DMGravityKernel kernel(eps, G);
+#ifdef PROFILE
+        profile.dm_source_tree.start();
+#endif
+        dm_source_tree.calcForceAll(kernel, kernel, dm_tree_particles, dinfo);
+#ifdef PROFILE
+        // Record local elapsed time without adding synchronization to the force path.
+        profile.dm_source_tree.barrier();
+        profile.dm_source_tree.end();
+#endif
+#pragma omp parallel for
+        for (PS::S32 i=0; i<nstar; ++i) {
+            const auto f=dm_source_tree.getForce(i);
+            system_soft[i].acc += f.acc;
+            system_soft[i].pot_dm = f.pot;
+            system_soft[i].pot_tot += f.pot;
+            system_soft[i].pot_soft += f.pot;
+        }
+#pragma omp parallel for
+        for (PS::S32 i=0; i<ndm; ++i) {
+            const auto f=dm_source_tree.getForce(nstar+i);
+            system_dm[i].acc=f.acc;
+#ifdef GALPY
+            // externalForce() precedes tree writeback: restore it once.
+            system_dm[i].acc += system_dm[i].acc_ext;
+#endif
+            system_dm[i].pot_dm=f.pot+G*system_dm[i].mass/eps;
+        }
+        // FDPS's stellar tree_soft LET was built for stellar targets only.
+        // Build a separate LET covering DM; evaluate ONLY DM targets here.
+        for (PS::S32 i=0; i<nstar; ++i) {
+            auto& p=dm_tree_particles[i];
+            p.mass=std::max(PS::F64(0.0),system_soft[i].mass); p.active=false;
+        }
+        for (PS::S32 i=0; i<ndm; ++i) dm_tree_particles[nstar+i].mass=0.0;
+#ifdef PROFILE
+        profile.star_dm_tree.start();
+#endif
+        dm_stellar_source_tree.calcForceAll(kernel, kernel, dm_tree_particles, dinfo);
+#ifdef PROFILE
+        profile.star_dm_tree.barrier();
+        profile.star_dm_tree.end();
+#endif
+#pragma omp parallel for
+        for (PS::S32 i=0; i<ndm; ++i) {
+            const auto f=dm_stellar_source_tree.getForce(nstar+i);
+            system_dm[i].acc+=f.acc;
+            system_dm[i].pot_star=f.pot;
+        }
+#ifdef PROFILE
+        profile.dm_force.barrier();
+        profile.dm_force.end();
+#endif
+    }
+
+    void kickDarkMatter(const PS::F64 dt) {
+        if (!darkMatterEnabled()) return;
+        const PS::S32 n = system_dm.getNumberOfParticleLocal();
+#pragma omp parallel for
+        for (PS::S32 i=0; i<n; ++i) system_dm[i].vel += system_dm[i].acc*dt;
+    }
+
+    void driftDarkMatter(const PS::F64 dt) {
+        if (!darkMatterEnabled()) return;
+        const PS::S32 n = system_dm.getNumberOfParticleLocal();
+#pragma omp parallel for
+        for (PS::S32 i=0; i<n; ++i) system_dm[i].pos += system_dm[i].vel*dt;
+    }
+#endif
 
     //! calculate tree solf force
     void treeSoftForce() {
@@ -1087,7 +1300,29 @@ public:
 #endif
     }
 
-    //! calculate external force
+    //! Recenter both particle systems using the common stellar frame.
+    // Recentring stars must leave star-DM separations and inertial velocities
+    // unchanged. DM snapshots share the stellar header's moving frame.
+    void recenterParticleSystems() {
+#ifdef RECORD_CM_IN_HEADER
+#ifdef DARKMATTER
+        const PS::F64vec old_pos = stat.pcm.pos, old_vel = stat.pcm.vel;
+#endif
+        stat.calcAndShiftCenterOfMass(&system_soft[0], stat.n_real_loc);
+#ifdef DARKMATTER
+        if (darkMatterEnabled()) {
+            const PS::F64vec dp = stat.pcm.pos-old_pos;
+            const PS::F64vec dv = stat.pcm.vel-old_vel;
+            for (PS::S32 i=0; i<system_dm.getNumberOfParticleLocal(); ++i) {
+                system_dm[i].pos -= dp;
+                system_dm[i].vel -= dv;
+            }
+        }
+#endif
+#endif
+    }
+
+    //! Calculate external forces, caching the DM term across tree writeback.
     void externalForce() {
 #ifdef PROFILE
         profile.other.start();
@@ -1100,6 +1335,12 @@ public:
 
         galpy_manager.resetPotAcc();
         galpy_manager.calcMovePotAccFromPot(stat.time, &stat.pcm.pos[0]);
+        // Potential-potential acceleration is replicated. Only particle
+        // reactions are summed across MPI ranks below.
+        std::vector<PS::F64vec> pot_acc_base(galpy_manager.pot_set_pars.size());
+        for (std::size_t k=0; k<pot_acc_base.size(); ++k)
+            for (int d=0; d<3; ++d)
+                pot_acc_base[k][d] = galpy_manager.pot_set_pars[k].acc[d];
 
         PS::S64 n_loc_all = system_soft.getNumberOfParticleLocal();
 #pragma omp parallel for
@@ -1126,6 +1367,31 @@ public:
             pi.pot_ext = pot;
 #endif
         }
+#ifdef DARKMATTER
+        if (darkMatterEnabled()) {
+            const PS::S32 ndm = system_dm.getNumberOfParticleLocal();
+#pragma omp parallel for
+            for (PS::S32 i=0; i<ndm; ++i) {
+                auto& p = system_dm[i];
+                PS::F64vec pos_global = p.pos, pos_local = p.pos;
+#ifdef RECORD_CM_IN_HEADER
+                pos_global += stat.pcm.pos;
+#else
+                pos_local -= stat.pcm.pos;
+#endif
+                galpy_manager.calcAccPot(&p.acc_ext[0], p.pot_ext, stat.time,
+                    input_parameters.gravitational_constant.value*p.mass,
+                    &pos_global[0], &pos_local[0]);
+            }
+        }
+#endif
+        for (std::size_t k=0; k<pot_acc_base.size(); ++k) {
+            auto& p = galpy_manager.pot_set_pars[k];
+            if (p.mode==2)
+                for (int d=0; d<3; ++d)
+                    p.acc[d] = pot_acc_base[k][d]
+                        + PS::Comm::getSum(p.acc[d]-pot_acc_base[k][d]);
+        }
 #endif //GALPY
         
 #ifdef PROFILE
@@ -1151,6 +1417,11 @@ public:
 
         stat.pcm.vel += dv;
         for (int i=0; i<stat.n_all_loc; i++) system_soft[i].vel -= dv;
+#ifdef DARKMATTER
+        if (darkMatterEnabled())
+            for (PS::S32 i=0; i<system_dm.getNumberOfParticleLocal(); ++i)
+                system_dm[i].vel -= dv;
+#endif
 
         //auto& adr = search_cluster.getAdrSysOneCluster();
         //for (int i=0; i<adr.size(); i++) system_soft[adr[i]].vel -= dv;
@@ -1416,6 +1687,10 @@ public:
         kickSend(system_soft, search_cluster.getAdrSysConnectClusterSend(), _dt_kick);
         // send kicked particle from sending list, and receive remote single particle
         search_cluster.SendSinglePtcl(system_soft, system_hard_connected.getPtcl());
+#endif
+
+#ifdef DARKMATTER
+        kickDarkMatter(_dt_kick);
 #endif
 
 #ifdef GALPY
@@ -1793,6 +2068,16 @@ public:
 #endif
         // Domain decomposition, parrticle exchange and force calculation
         if(n_loop % 16 == 0 || _enforce) {
+#ifdef DARKMATTER
+            if (darkMatterEnabled()) {
+                // Sample both species so extended DM haloes participate in
+                // spatial load balancing, then exchange both into these domains.
+                dinfo.collectSampleParticle(system_soft, true);
+                dinfo.collectSampleParticle(system_dm, false);
+                dinfo.decomposeDomain();
+            }
+            else
+#endif
             dinfo.decomposeDomainAll(system_soft,domain_decompose_weight);
             //std::cout<<"rank: "<<my_rank<<" weight: "<<domain_decompose_weight<<std::endl;
         }
@@ -1941,6 +2226,9 @@ public:
 #ifdef GALPY
         if (print_flag) galpy_manager.printData(std::cout);
 #endif
+#ifdef DARKMATTER
+        if (write_style>0) writeDarkMatterStatus();
+#endif
         // write status, output to separate snapshots
         if(write_style==1) {
 
@@ -1963,6 +2251,9 @@ public:
             else if(input_parameters.data_format.value==0||input_parameters.data_format.value==2)
                 system_soft.writeParticleBinary(fname.c_str(), file_header);
             system_soft.setNumberOfParticleLocal(stat.n_all_loc);
+#ifdef DARKMATTER
+            writeDarkMatterSnapshot();
+#endif
 
             if(my_rank==0) {
                 // status output
@@ -2409,6 +2700,9 @@ public:
         profile.exchange.start();
 #endif
         system_soft.exchangeParticle(dinfo);
+#ifdef DARKMATTER
+        if (darkMatterEnabled()) system_dm.exchangeParticle(dinfo);
+#endif
 
         const PS::S32 n_loc = system_soft.getNumberOfParticleLocal();
 
@@ -2790,6 +3084,36 @@ public:
 
         // particle system
         system_soft.initialize();
+#ifdef DARKMATTER
+        system_dm.initialize();
+        dm_tree_particles.initialize();
+        dm_source_tree.initialize(input_parameters.n_glb.value,
+            input_parameters.theta.value, input_parameters.n_leaf_limit.value,
+            input_parameters.n_group_limit.value);
+        dm_stellar_source_tree.initialize(input_parameters.n_glb.value,
+            input_parameters.theta.value, input_parameters.n_leaf_limit.value,
+            input_parameters.n_group_limit.value);
+        system_dm.setAverageTargetNumberOfSampleParticlePerProcess(input_parameters.n_smp_ave.value);
+        if (darkMatterEnabled() && write_style>0 && my_rank==0) {
+            if (input_parameters.append_switcher.value==1) {
+                std::ifstream previous(input_parameters.fname_dm_snp.value+".status");
+                std::string header;
+                if (std::getline(previous, header)
+                    && (header.find("stellar_status_excludes_cross=1")==std::string::npos
+                        || header.find("dm_external_energy=1")==std::string::npos)) {
+                    std::cerr << "Error: cannot append new energy bookkeeping to old DM status; "
+                              << "use -a 0 in a new output directory." << std::endl;
+                    PS::Abort();
+                }
+            }
+            const std::ios_base::openmode mode = input_parameters.append_switcher.value==1
+                ? (std::ofstream::out|std::ofstream::app) : std::ofstream::out;
+            fstatus_dm.open((input_parameters.fname_dm_snp.value+".status").c_str(), mode);
+            if (input_parameters.append_switcher.value!=1 || fstatus_dm.tellp()==0)
+                fstatus_dm << "# time N_dm M_dm K_dm U_dm_dm U_star_dm E_dm_and_cross U_dm_ext; stellar_status_excludes_cross=1 dm_external_energy=1\n";
+            fstatus_dm << std::setprecision(WRITE_PRECISION);
+        }
+#endif
 
         // domain decomposition
         system_soft.setAverageTargetNumberOfSampleParticlePerProcess(input_parameters.n_smp_ave.value);
@@ -2831,6 +3155,9 @@ public:
         else
             system_soft.readParticleBinary(data_filename, file_header);
         PS::Comm::broadcast(&file_header, 1, 0);
+#ifdef DARKMATTER
+        readDarkMatterFromFile();
+#endif
         PS::S64 n_glb = system_soft.getNumberOfParticleGlobal();
         PS::S64 n_loc = system_soft.getNumberOfParticleLocal();
 
@@ -3402,7 +3729,7 @@ public:
                 pi_cm.mass = pi_cm.vel.x = pi_cm.vel.y = pi_cm.vel.z = 0.0;
             }
 #ifdef RECORD_CM_IN_HEADER
-            stat.calcAndShiftCenterOfMass(&system_soft[0], stat.n_real_loc);
+            recenterParticleSystems();
 #else
             stat.calcCenterOfMass(&system_soft[0], stat.n_real_loc);
 #endif
@@ -3574,7 +3901,11 @@ public:
         assert(checkTimeConsistence());
 
         // one particle case
-        if (stat.n_real_glb==1) {
+        if (stat.n_real_glb==1
+#ifdef DARKMATTER
+            && !darkMatterEnabled()
+#endif
+            ) {
             Ptcl::group_data_mode = GroupDataMode::artificial;
 
             if (stat.n_real_loc==1) system_soft[0].clearForce();
@@ -3632,6 +3963,9 @@ public:
         // >5 correct change over
         /// correct system_soft.acc with changeover, using system_hard and system_soft particles
         treeForceCorrectChangeover();
+#ifdef DARKMATTER
+        darkMatterForce();
+#endif
 
         // correct force due to the change over update
         correctForceChangeOverUpdate();
@@ -3685,7 +4019,11 @@ public:
         PS::F64 dt_output = input_parameters.dt_snap.value;
         //bool start_flag=true;
 
-        if (stat.n_real_loc==1) { 
+        if (stat.n_real_loc==1
+#ifdef DARKMATTER
+            && !darkMatterEnabled()
+#endif
+            ) {
             assert(system_soft.getNumberOfParticleLocal()==1);
             auto& p = system_soft[0];
 
@@ -3850,7 +4188,11 @@ public:
         assert(initial_step_flag);
 
         // for one particle case
-        if (stat.n_real_glb==1) return integrateOneToTime(_time_break);
+        if (stat.n_real_glb==1
+#ifdef DARKMATTER
+            && !darkMatterEnabled()
+#endif
+            ) return integrateOneToTime(_time_break);
 
         // finish interrupted integrations
         if (n_interrupt_glb>0) finishInterruptDrift();
@@ -3880,7 +4222,7 @@ public:
 
 #ifdef RECORD_CM_IN_HEADER
             // update center
-            stat.calcAndShiftCenterOfMass(&system_soft[0], stat.n_real_loc);
+            recenterParticleSystems();
 #endif
 
             // >9. Domain decomposition
@@ -3912,6 +4254,9 @@ public:
             /// correct system_soft.acc with changeover, using system_hard and system_soft particles
             /// substract tidal tensor measure point force
             treeForceCorrectChangeover();
+#ifdef DARKMATTER
+        darkMatterForce();
+#endif
 
 
 #ifdef KDKDK_4TH
@@ -4076,6 +4421,9 @@ public:
 #endif            
             
             drift(dt_drift);
+#ifdef DARKMATTER
+            driftDarkMatter(dt_drift);
+#endif
 
             // update stat time 
             stat.time = system_hard_one_cluster.getTimeOrigin();
@@ -4106,6 +4454,9 @@ public:
 
         if (fstatus.is_open()) fstatus.close();
         if (fesc.is_open()) fesc.close();
+#ifdef DARKMATTER
+        if (fstatus_dm.is_open()) fstatus_dm.close();
+#endif
 #ifdef PROFILE
         if (fprofile.is_open()) fprofile.close();
 #endif

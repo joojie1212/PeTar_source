@@ -51,6 +51,9 @@
 #endif
 #include "main.h"
 
+#ifdef DARKMATTER
+#include "darkmatter.h"
+#endif
 //use OpenMP if not specified otherwise
 #ifndef NOOMP
 #include<omp.h>
@@ -60,6 +63,9 @@
 
 int main (int argv, char **argc) {
 
+#ifdef DARKMATTER
+    DMOptions dm = {0};
+#endif
 	/*******************
 	 * Input variables *
 	 *******************/
@@ -188,11 +194,36 @@ int main (int argv, char **argc) {
 	int option;
 	static struct option long_options[] = {
 		{"blackhole", no_argument, 0, 1000},
+#ifdef DARKMATTER
+        {"dm-nfw", no_argument, 0, 1100},
+        {"dm-number", required_argument, 0, 1101},
+        {"dm-mass", required_argument, 0, 1102},
+        {"dm-rs", required_argument, 0, 1103},
+        {"dm-rt", required_argument, 0, 1104},
+        {"dm-softening", required_argument, 0, 1105},
+        {"dm-grid", required_argument, 0, 1106},
+        {"petar-interrupt", required_argument, 0, 1107},
+#endif
 		{0, 0, 0, 0}
 	};
-	while ((option = getopt_long(argv, argc, "N:M:P:W:R:r:c:g:S:D:T:Q:C:A:O:G:o:f:a:m:B:b:p:s:t:e:Z:X:x:V:u:h:?", long_options, NULL)) != -1) switch (option)
+	while ((option = getopt_long(argv, argc, "N:M:P:W:R:r:c:g:S:D:T:Q:C:A:O:G:o:f:a:m:B:b:p:s:t:e:Z:X:x:V:u:h?", long_options, NULL)) != -1) switch (option)
 	{
 		case 1000: blackhole = 1; break;
+#ifdef DARKMATTER
+        case 1100: dm.enabled = 1; break;
+        case 1101: dm.number = dm_integer(optarg); dm.specified = 1; break;
+        case 1102: dm.mass = dm_positive(optarg); dm.specified = 1; break;
+        case 1103: dm.rs = dm_positive(optarg); dm.specified = 1; break;
+        case 1104: dm.rt = dm_positive(optarg); dm.specified = 1; break;
+        case 1105: dm.eps = dm_positive(optarg); dm.specified = 1; break;
+        case 1106: dm.grid = dm_integer(optarg); dm.specified = 1; break;
+        case 1107:
+            if (!strcmp(optarg, "none")) dm.bse = 0;
+            else if (!strcmp(optarg, "bse")) dm.bse = 1;
+            else dm_fail("--petar-interrupt must be none or bse");
+            dm.specified = 1;
+            break;
+#endif
 		case 'N': N = atoi(optarg); Mcl = 0.0; break;
 		case 'M': Mcl = atof(optarg); N = 0; break;
 		case 'P':
@@ -348,6 +379,17 @@ int main (int argv, char **argc) {
 		case '?':	help(msort); return 1;
 	};
 	// some parameters ought to be checked for validity
+#ifdef DARKMATTER
+    if (dm.specified && !dm.enabled) dm_fail("DM options require --dm-nfw");
+    if (dm.enabled) {
+        dm_validate(&dm);
+        if (profile != 0 || S != 0.0 || D != 3.0 || Q != 0.5 ||
+            nbin != 0 || fbin != 0.0 || tf != 0 || xx != 0 ||
+            epoch != 0.0 || units != 1 || code != 3 || !(Rh > 0.0))
+            dm_fail("NFW mode requires -P 0 -S 0 -D 3 -Q 0.5 -B 0 -b 0 "
+                    "-t 0 -e 0 -u 1 -C 3, Rh>0, and no gas potential");
+    }
+#endif
 	if (S<0 || S>1) {
 	  printf("Bad value of S=%g\n",S);
 	  exit(1);
@@ -374,6 +416,9 @@ int main (int argv, char **argc) {
 	}
 
 	//print summary of input parameters to .info file
+#ifdef DARKMATTER
+    if (!dm.enabled)
+#endif
 	info(output, N, Mcl, profile, W0, S, D, Q, Rh, gamma, a, Rmax, tcrit, tf, RG, VG, mfunc, single_mass, mlow, mup, alpha, mlim, alpha_L3, beta_L3, mu_L3, weidner, mloss, remnant, epoch, Z, prantzos, nbin, fbin, pairing, msort, adis, amin, amax, eigen, BSE, extmass, extrad, extdecay, extstart, code, seed, dtadj, dtout, dtplot, gpu, regupdate, etaupdate, esc, units, match, symmetry, OBperiods);
 	
 	
@@ -604,6 +649,14 @@ int main (int argv, char **argc) {
 	
 	//Pair binary masses and convert to centre-of-mass particles
 	int Nstars;
+#ifdef DARKMATTER
+    if (dm.enabled) {
+        const int result = dm_generate(&dm, N, star, Rh, output, blackhole, seed);
+        for (j=0; j<NMAX; ++j) free(star[j]);
+        free(star);
+        return result;
+    }
+#endif
 	if (!nbin) nbin = 0.5*N*fbin;
 
 	double **mbin;	//component mass & stellar evol parameter array
@@ -5290,6 +5343,9 @@ void info(char *output, int N, double Mcl, int profile, double W0, double S, dou
 }
 
 void help(double msort) {
+#ifdef DARKMATTER
+    dm_help();
+#endif
 	printf("\n Usage: mcluster [--blackhole] -[N|M|P|W|R|r|c|g|S|D|T|Q|C|A|O|G|o|f|a|m|B|b|p|s|t|e|Z|X|V|x|u|h|?]\n");
 	printf("                                                                     \n");
 	printf("       -N <number> (number of stars)                                 \n");
@@ -5322,8 +5378,15 @@ void help(double msort) {
 	printf("       -a <value> (IMF slope; for user defined IMF, may be used      \n"); 
 	printf("                   multiple times, from low mass to high mass;       \n");
 	printf("                   for L3 IMF use three times for alpha, beta and mu)\n");
-	printf("       -m <value> (stellar mass for equal-mass mode (-f 0);          \n");
-	printf("                   IMF mass limits for other modes [Msun])           \n");
+	printf("       -m <value> (mass in Msun; meaning depends on -f)              \n");
+	printf("                   -f 0: mass of each star; use -m only once.        \n");
+	printf("                         Default: 30 Msun if -m is omitted.         \n");
+	printf("                         With -M, N is rounded down from M/m;       \n");
+	printf("                         actual total mass is N*m.                  \n");
+	printf("                   Other modes: original IMF mass limits retained; \n");
+	printf("                         use -m lower -m upper for the mass range.  \n");
+	printf("                   -f 2: repeat -m for boundaries from low to high,\n");
+	printf("                         with -a for each interval's IMF slope.    \n");
 	printf("       --blackhole (set every generated object to a black hole;      \n");
 	printf("                    disabled by default)                            \n");
 	printf("       -B <number> (number of binary systems)                        \n");
@@ -5350,6 +5413,8 @@ void help(double msort) {
 	printf("                                                                     \n");
 	printf(" Examples: mcluster -N 1000 -R 0.8 -P 1 -W 3.0 -f 1 -B 100 -o test1  \n");
 	printf("           mcluster -N 1000 -f 0 -m 30 -o equal_mass_30               \n");
+	printf("           mcluster -M 10000 -f 0 -m 1 -u 1 -C 5 -o equal_mass_1    \n");
+	printf("           mcluster -N 1000 -f 1 -m 0.08 -m 100 -o kroupa          \n");
 	printf("           mcluster -N 1000 -f 0 -m 30 --blackhole -o bh_cluster      \n");
 	printf("           mcluster -f 2 -m 0.08 -a -1.35 -m 0.5 -a -2.7 -m 100.0    \n");
 	printf("           mcluster -t 3 -X 8500 -X 0 -X 0 -V 0 -V 220 -V 0          \n");

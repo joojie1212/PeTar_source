@@ -760,7 +760,7 @@ public:
     MWPotentialEvolve mw_evolve;
 
     GalpyManager(): pot_type_offset(), pot_type(), 
-                    pot_args_offset(), pot_args(), change_args(), change_args_offset(),
+                    pot_args_offset(), pot_args(), time(0.0), change_args(), change_args_offset(),
                     pot_set_pars(), pot_sets(), update_time(0.0), rscale(1.0), vscale(1.0), tscale(1.0), fscale(1.0), pscale(1.0), gmscale(1.0), fconf(), set_name(), set_parfile(), mw_evolve() {}
 
     //! print current potential data
@@ -953,8 +953,23 @@ public:
             }
         }
 
+        // New snapshots persist every potential set, including static CLI
+        // potentials. Retain the legacy restart path for older snapshots.
+        if (_restart_flag) {
+            int has_state = 0;
+#ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
+            if (PS::Comm::getRank()==0) {
+#endif
+                std::ifstream state(_conf_name+".state");
+                has_state = state.good();
+#ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
+            }
+            PS::Comm::broadcast(&has_state, 1, 0);
+#endif
+            if (has_state) readDataFromFile(_conf_name+".state", _print_flag);
+        }
         updatePotentialSet();
-        
+
         if(_print_flag) {
             printData(std::cout);
             std::cout<<"----- Finish initialize Galpy potential -----\n";
@@ -1472,6 +1487,10 @@ public:
       @param[in] _time current time
      */
     void writePotentialPars(const std::string& _filename, const double& _system_time) {
+        // Common state for static, moving and time-dependent sets. Existing
+        // .galpy files retain their legacy model-specific format.
+        time = _system_time*tscale;
+        writeDataToFile(_filename+".state");
         if (set_name=="MWPotentialEvolve") {
             assert(mw_evolve.frw.time==_system_time);
             mw_evolve.writeDataToFile(_filename);
@@ -1603,6 +1622,8 @@ public:
     void calcAccPot(double* acc, double& pot, const double _time, const double gm, const double* pos_g, const double* pos_l) {
         assert(pot_sets.size()==pot_set_pars.size());
         int nset = pot_sets.size();
+        pot = 0.0;
+        acc[0] = acc[1] = acc[2] = 0.0;
         if (nset>0) {
             double t = _time*tscale;
 
@@ -1628,8 +1649,8 @@ public:
                 double dz = z[i]-pos_k[2];
                 double rxy= std::sqrt(dx*dx+dy*dy);
                 double phi= std::atan2(dy, dx);
-                double sinphi = dy/rxy;
-                double cosphi = dx/rxy;
+                double sinphi = rxy>0.0 ? dy/rxy : 0.0;
+                double cosphi = rxy>0.0 ? dx/rxy : 1.0;
 
                 auto& pot_args = pot_sets[k].arguments;
                 double acc_rxy = calcRforce(rxy, dz, phi, t, npot, pot_args);
@@ -1642,7 +1663,7 @@ public:
 //                double pot_i = evaluatePotentials(rxy, dz, phi, t, npot, pot_args);
                 double pot_i = evaluatePotentials(rxy, dz, npot, pot_args);
                 double gm_pot = pot_set_pars[k].gm;
-                if (rxy>0.0) {
+                {
                     assert(!std::isinf(acc_rxy));
                     assert(!std::isnan(acc_rxy));
                     assert(!std::isinf(acc_phi));
@@ -1650,16 +1671,21 @@ public:
                     assert(!std::isinf(pot));
                     assert(!std::isnan(pot));
                     pot += pot_i;
-                    double acc_x = (cosphi*acc_rxy - sinphi*acc_phi/rxy);
-                    double acc_y = (sinphi*acc_rxy + cosphi*acc_phi/rxy);
+                    const double azimuthal = rxy>0.0 ? acc_phi/rxy : 0.0;
+                    double acc_x = (cosphi*acc_rxy - sinphi*azimuthal);
+                    double acc_y = (sinphi*acc_rxy + cosphi*azimuthal);
                     acc[0] += acc_x;
                     acc[1] += acc_y;
                     acc[2] += acc_z;
                     if (mode_k==2) {
                         double* acc_pot = pot_set_pars[k].acc;
-                        acc_pot[0] -= gm*acc_x/gm_pot; // anti-acceleration to potential set origin
-                        acc_pot[1] -= gm*acc_y/gm_pot;
-                        acc_pot[2] -= gm*acc_z/gm_pot;
+                        // calcAccPot is called concurrently for stars and DM.
+#pragma omp atomic update
+                        acc_pot[0] -= gm*gmscale*acc_x/gm_pot;
+#pragma omp atomic update
+                        acc_pot[1] -= gm*gmscale*acc_y/gm_pot;
+#pragma omp atomic update
+                        acc_pot[2] -= gm*gmscale*acc_z/gm_pot;
                     }
                 }
             }
@@ -1697,7 +1723,7 @@ public:
             std::cerr<<"Error: Galpy potential parameter file to write, "<<_filename<<", cannot be open!"<<std::endl;
             abort();
         }
-        fout<<std::setprecision(14);
+        fout<<std::setprecision(17);
 
         std::size_t n_set = pot_set_pars.size();
         std::size_t n_pot = pot_type.size();
@@ -1825,6 +1851,9 @@ public:
         }
 
         broadcastDataMPI();
+        // The restart epoch is read on rank zero. Without this broadcast,
+        // other ranks evolve changing arguments a second time on restart.
+        PS::Comm::broadcast(&time, 1, 0);
 #endif
 
         if (_print_flag) printData(std::cout);
@@ -1892,5 +1921,3 @@ public:
         clear();
     }
 };
-
-

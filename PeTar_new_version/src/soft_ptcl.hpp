@@ -40,6 +40,11 @@ public:
     PS::S64 n_ngb;
     PS::S32 rank_org;
     PS::S32 adr;
+#ifdef DARKMATTER
+    // Keep after the contiguous acc/potential block used by binary snapshots.
+    // Recomputed at each force evaluation; not part of snapshot layout.
+    PS::F64 pot_dm = 0.0;
+#endif
 //    static PS::F64 r_out;
 
     FPSoft() {}
@@ -82,6 +87,9 @@ public:
     }
 
     void copyFromForce(const ForceSoft & force){
+#ifdef DARKMATTER
+        pot_dm = 0.0;
+#endif
         acc = force.acc;
         pot_tot = force.pot;
         pot_soft= pot_tot;
@@ -258,6 +266,9 @@ public:
 
     //! clear force
     void clearForce() {
+#ifdef DARKMATTER
+        pot_dm = 0.0;
+#endif
         acc = 0.0;
         pot_tot = 0.0;
         pot_soft = 0.0;
@@ -374,4 +385,3 @@ public:
         id = rank_org = adr_org = -1;
     }
 };
-

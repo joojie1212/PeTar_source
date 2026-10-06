@@ -1,0 +1,26 @@
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -265,5 +265,2 @@
+-$(TARGET): src/bh_peters.hpp src/bh_gw_evolution.hpp
+-build/petar.hard.debug: $(BHMERGER_OBJS)
+-
+ build/petar.format.transfer: format_transfer.cxx |build
+@@ -282,2 +279,5 @@
++$(TARGET): src/bh_peters.hpp src/bh_gw_evolution.hpp
++build/petar.hard.debug: $(BHMERGER_OBJS)
++
+ build/petar.hard.test: hard_test.cxx $(HARD_SRC) |build
+diff --git a/Makefile.in b/Makefile.in
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -265,5 +265,2 @@
+-$(TARGET): src/bh_peters.hpp src/bh_gw_evolution.hpp
+-build/petar.hard.debug: $(BHMERGER_OBJS)
+-
+ build/petar.format.transfer: format_transfer.cxx |build
+@@ -282,2 +279,5 @@
++$(TARGET): src/bh_peters.hpp src/bh_gw_evolution.hpp
++build/petar.hard.debug: $(BHMERGER_OBJS)
++
+ build/petar.hard.test: hard_test.cxx $(HARD_SRC) |build
