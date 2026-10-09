@@ -13,6 +13,8 @@ do
 	    echo '  -f [S] Specify the output file (PeTar input data) name (default: input file name + ".input")';
 	    echo '  -i [I] Skip the given number of rows in the input data file (default: 0)';
 	    echo '  -s [S] Add stellar evolution columns: base | bse | no (default: no)';
+	    echo '  --blackhole Initialize every object as a BSE black hole (kw=14).';
+	    echo '         Requires "-s bse"; sets m0=mt=mc=input mass, radius=4.24e-6*M Rsun, zero spin, and luminosity=1e-10.';
 	    echo '  -m [F] Set the mass scaling factor from the input data unit to [Msun]: mass[input unit]*m_scale=mass[Msun] (default: 1.0)';
 	    echo '      Note that Msun is used as the mass unit in BSE based stellar evolution.';
 	    echo '  -r [F] Set the radius scaling factor from the input data unit to [pc] (default: 1.0)';
@@ -43,6 +45,7 @@ do
 	-f) shift; fout=$1; shift;;
 	-i) shift; igline=$1; shift;;
 	-s) shift; seflag=$1; shift;;
+	--blackhole) blackhole=1; shift;;
 	-m) shift; mscale=$1; convert=1; shift;;
 	-r) shift; rscale=$1; convert=1; shift;;
 	-v) shift; vscale=$1; convert=1; shift;;
@@ -61,6 +64,7 @@ fi
 [ -z $fout ] && fout=$fname.input
 [ -z $igline ] && igline=0
 [ -z $seflag ] && seflag='no'
+[ -z $blackhole ] && blackhole=0
 [ -z $extflag ] && extflag='no'
 [ -z $rscale ] && rscale=1.0
 [ -z $mscale ] && mscale=1.0
@@ -73,6 +77,11 @@ fi
 echo 'Transfer "'$fname'" to PeTar input data file "'$fout'"'
 echo 'Skip rows: '$igline
 echo 'Add stellar evolution columns: '$seflag
+
+if [[ $blackhole == 1 && "$seflag" != *"bse"* ]]; then
+    echo 'Error: --blackhole requires -s bse' >&2
+    exit 1
+fi
 
 n=`wc -l $fname|awk '{print $1}'`
 n=`expr $n - $igline`
@@ -141,9 +150,16 @@ if [[ $seflag != 'no' ]]; then
 	awk '{OFMT="%.15g"; print '"$base_col$se_col$soft_col"'}' $fout.scale__ >>$fout
     elif [[ "$seflag" == *"bse"* ]]; then
 	#       type, m0,  m,     rad, mc,  rc,  spin, epoch, time, lum
-	bse_col='1, $1*ms, $1*ms, 0.0, 0.0, 0.0, 0.0,  0.0,   0.0,  0.0,'
+	if [[ $blackhole == 1 ]]; then
+	    # Match BSE hrdiag.f for kw=14: the whole mass is core mass and
+	    # r=4.24e-6*M Rsun, approximately the Schwarzschild radius.
+	    bse_col='14, $1*ms, $1*ms, 4.24e-6*$1*ms, $1*ms, 0.0, 0.0, 0.0, 0.0, 1.0e-10,'
+	else
+	    bse_col='1, $1*ms, $1*ms, 0.0, 0.0, 0.0, 0.0,  0.0,   0.0,  0.0,'
+	fi
 
 	echo 'Interrupt mode: '$seflag
+	[[ $blackhole == 1 ]] && echo 'Initialize all objects as black holes: kw=14, radius=4.24e-6*M Rsun'
 	echo 'mass scale from PeTar unit (PT) to Msun (m[Msun] = m[PT]*mscale): ' $mscale
 	awk -v ms=$mscale  '{OFMT="%.15g"; print '"$base_col$se_col$bse_col$soft_col"'}' $fout.scale__ >>$fout
     else

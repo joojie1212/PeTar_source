@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include <limits>
 #include "Common/Float.h"
 #include "Common/binary_tree.h"
 #include "changeover.hpp"
@@ -10,7 +11,6 @@
 #include "two_body_tide.hpp"
 #ifdef BHMERGER
 #include "bhmerger_output.hpp"
-#include "bh_gw_evolution.hpp"
 #endif
 #ifdef BSE_BASE
 #include "bse_interface.h"
@@ -69,6 +69,51 @@ public:
         return debug_lessmerger_rsun>0.0
             ? debug_lessmerger_rsun/bse_manager.rscale
             : p1.radius+p2.radius;
+    }
+#endif
+
+#if defined(BSE_BASE) && defined(BHMERGER)
+    void clearBHMergerPrediction(PtclHard& p1, PtclHard& p2) const {
+        p1.time_merger = p2.time_merger = -1.0;
+        p1.merger_semi = p2.merger_semi = -1.0;
+        p1.merger_ecc = p2.merger_ecc = -1.0;
+    }
+
+    template<class Tbinary>
+    void refreshBHMergerPrediction(Tbinary& bin, PtclHard& p1, PtclHard& p2,
+                                   const Float now) const {
+        bin.calcOrbit(gravitational_constant);
+        if (!(bin.semi>0.0 && bin.ecc>=0.0 && bin.ecc<1.0)
+            || !std::isfinite(bin.semi) || !std::isfinite(bin.ecc)) {
+            clearBHMergerPrediction(p1, p2);
+            return;
+        }
+        const Float c = bse_manager.getSpeedOfLight();
+        const Float e2 = bin.ecc*bin.ecc;
+        const Float lifetime = (5.0/256.0)*std::pow(c,5)*std::pow(bin.semi,4)
+            /(std::pow(gravitational_constant,3)*p1.mass*p2.mass*(p1.mass+p2.mass))
+            *std::pow(1.0-e2,3.5)
+            /(1.0+(73.0/24.0)*e2+(37.0/96.0)*e2*e2);
+        const Float deadline = std::isfinite(lifetime)
+            ? now + ((lifetime<bin.period) ? 0.0 : lifetime) : -1.0;
+        p1.time_merger = p2.time_merger = deadline;
+        p1.merger_semi = p2.merger_semi = bin.semi;
+        p1.merger_ecc = p2.merger_ecc = bin.ecc;
+        p1.setBinaryPairID(p2.id);
+        p2.setBinaryPairID(p1.id);
+    }
+
+    template<class Tbinary>
+    bool isBHMergerOrbitClearlyPerturbed(const Tbinary& bin,
+                                         const PtclHard& p1,
+                                         const PtclHard& p2) const {
+        if (!(p1.merger_semi>0.0 && p2.merger_semi>0.0)) return false;
+        const Float saved_a = 0.5*(p1.merger_semi+p2.merger_semi);
+        const Float saved_e = 0.5*(p1.merger_ecc+p2.merger_ecc);
+        // Ignore integrator roundoff. A 0.1% energy-scale change or an absolute
+        // 1e-3 eccentricity change is large enough to invalidate the clock.
+        return std::fabs(bin.semi-saved_a) > 1.0e-3*std::fabs(saved_a)
+            || std::fabs(bin.ecc-saved_e) > 1.0e-3;
     }
 #endif
 
@@ -908,14 +953,6 @@ public:
             auto* p1 = _bin.getLeftMember();
             auto* p2 = _bin.getRightMember();
 
-#if defined(BHMERGER) && defined(BSE_BASE)
-            const bool peters_pair = stellar_evolution_option>0
-                && p1->mass>0 && p2->mass>0
-                && p1->star.kw==14 && p2->star.kw==14;
-#else
-            const bool peters_pair = false;
-#endif
-
             COMM::Vector3<Float> pos_red(p2->pos[0] - p1->pos[0], p2->pos[1] - p1->pos[1], p2->pos[2] - p1->pos[2]);
             COMM::Vector3<Float> vel_red(p2->vel[0] - p1->vel[0], p2->vel[1] - p1->vel[1], p2->vel[2] - p1->vel[2]);
             Float drdv = pos_red * vel_red;
@@ -1140,9 +1177,7 @@ public:
             };
 
             bool check_flag = false;
-            // BH-BH radiation is advanced below. BSE must not also shrink or
-            // merge the same pair, otherwise the GW loss is double counted.
-            if (stellar_evolution_option>0 && !peters_pair) {
+            if (stellar_evolution_option>0) {
                 int binary_type_p1 = static_cast<int>(p1->getBinaryInterruptState());
                 int binary_type_p2 = static_cast<int>(p2->getBinaryInterruptState());
                 int binary_type_init = 0;
@@ -1245,6 +1280,8 @@ public:
                     //std::cout << "stellar:"<<ecc <<std::endl;
                     //Float ecc_bk = ecc;
                     Float semi = _bin.semi;
+                    const Float semi_before_bse = semi;
+                    const Float ecc_before_bse = ecc;
                     //Float semi_bk =semi;
                     Float mtot = p1->mass+p2->mass;
                     Float period = _bin.period;
@@ -1309,22 +1346,41 @@ public:
                     int nmax = bin_event.getEventNMax();
                     int binary_type_init = bin_event.getType(bin_event.getEventIndexInit());
                     bool bse_merger_event = false;
+                    bool bse_roche_event = false;
                     for (int i=0; i<nmax; i++) {
                         const int binary_type = bin_event.getType(i);
                         if (binary_type>0) {
                             binary_type_final = binary_type;
                             if (bse_manager.isMerger(binary_type)) bse_merger_event = true;
+                            if (bse_manager.isMassTransfer(binary_type)) bse_roche_event = true;
                         }
                         else if (binary_type<0) break;
                     }
                     const bool ordinary_stars =
                         p1_star_bk.kw>=1 && p1_star_bk.kw<=13
                         && p2_star_bk.kw>=1 && p2_star_bk.kw<=13;
+                    const bool bh_bh_pair =
+                        p1_star_bk.kw==14 && p2_star_bk.kw==14;
+#ifdef BHMERGER
+                    const bool bh_bh_merger_managed = bh_bh_pair;
+#else
+                    const bool bh_bh_merger_managed = false;
+#endif
                     const Float contact_radius = mergerCheckRadius(*p1, *p2);
                     const bool instant_contact =
                         _bin.r <= contact_radius;
+                    // A BH has no material surface or Roche-lobe mass-transfer
+                    // phase.  BSE can nevertheless label a sufficiently compact
+                    // BH-BH orbit Start_Roche/Coalescence because its generic
+                    // binary-evolution path uses effective compact-object radii.
+                    // Reject that merger unconditionally and let the BHMERGER
+                    // Peters clock below decide when to merge and apply the
+                    // remnant/recoil fit.
                     const bool defer_predicted_merger =
-                        ordinary_stars && bse_merger_event && !instant_contact;
+                        (bh_bh_merger_managed
+                         && (bse_roche_event || bse_merger_event))
+                        || (ordinary_stars && bse_merger_event
+                            && !instant_contact);
 
                     if (defer_predicted_merger) {
                         // Restore both stars.  Force another check after physical time
@@ -1332,6 +1388,18 @@ public:
                         // intervening perturbation is retained.
                         p1->star = p1_star_bk;
                         p2->star = p2_star_bk;
+#ifdef BHMERGER
+                        if (bh_bh_merger_managed) {
+                            refreshBHMergerPrediction(
+                                _bin, *p1, *p2, _bin_interrupt.time_now);
+                            const Float next_bh_check =
+                                std::max(_bin_interrupt.time_now,
+                                         std::max(p1->time_merger,
+                                                  p2->time_merger));
+                            p1->time_interrupt = p2->time_interrupt =
+                                std::min(next_bh_check, time_interrupt_max);
+                        }
+#endif
 #ifdef FROZEN_BINARY
                         // Contact is checked from the integrated positions below, so
                         // repeatedly asking orbit-averaged BSE at every AR substep adds
@@ -1339,15 +1407,21 @@ public:
                         // BSE stellar-evolution time instead.
                         Float next_bse_dt = bse_manager.getTimeStepBinary(
                             p1->star, p2->star, semi, ecc, binary_type_init);
-                        p1->time_interrupt = std::min(
-                            _bin_interrupt.time_now + std::max(next_bse_dt, frozen_min_interval),
-                            time_interrupt_max);
+                        if (!bh_bh_merger_managed)
+                            p1->time_interrupt = std::min(
+                                _bin_interrupt.time_now
+                                    + std::max(next_bse_dt,
+                                               frozen_min_interval),
+                                time_interrupt_max);
 #else
-                        p1->time_interrupt = _bin_interrupt.time_now;
+                        if (!bh_bh_merger_managed)
+                            p1->time_interrupt = _bin_interrupt.time_now;
 #endif
-                        p2->time_interrupt = _bin_interrupt.time_now;
+                        if (!bh_bh_merger_managed)
+                            p2->time_interrupt = _bin_interrupt.time_now;
 #ifdef FROZEN_BINARY
-                        p2->time_interrupt = p1->time_interrupt;
+                        if (!bh_bh_merger_managed)
+                            p2->time_interrupt = p1->time_interrupt;
 #endif
                         event_flag = 0;
                     }
@@ -1396,6 +1470,24 @@ public:
                     semi = COMM::Binary::periodToSemi(period, mtot, gravitational_constant);
                     //std::cout<<"postProcess1"<<std::endl;
                     postProcess(out, pos_cm, vel_cm, semi, ecc, binary_type_final);
+#ifdef BHMERGER
+                    // Refresh only when BSE really changed the orbit.  In
+                    // particular, an ordinary callback that merely reached this
+                    // code with unchanged a/e must leave the saved deadline alone.
+                    const bool bh_pair_after_bse = p1->mass>0.0 && p2->mass>0.0
+                        && p1->star.kw>=10 && p1->star.kw<15
+                        && p2->star.kw>=10 && p2->star.kw<15;
+                    // Use the same material-change threshold as the perturbation
+                    // path. Small BSE roundoff/noise must not churn the deadline.
+                    const bool bse_orbit_updated =
+                        semi_before_bse>0.0
+                        && (std::fabs(semi-semi_before_bse)
+                                > 1.0e-3*std::fabs(semi_before_bse)
+                            || std::fabs(ecc-ecc_before_bse)>1.0e-3);
+                    if (bh_pair_after_bse && bse_orbit_updated)
+                        refreshBHMergerPrediction(_bin, *p1, *p2,
+                                                  _bin_interrupt.time_now);
+#endif
                     }
                 }
             }
@@ -1405,24 +1497,6 @@ public:
             if (_bin_interrupt.status!=AR::InterruptStatus::merge&&_bin_interrupt.status!=AR::InterruptStatus::destroy) {
 
                 auto merge = [&](const Float& dr, const Float& t_peri, const Float& sd_factor) {
-#if defined(BHMERGER) && defined(BSE_BASE)
-                    if (peters_pair) {
-                        const double c=bse_manager.getSpeedOfLight();
-                        const double cutoff=10.0*gravitational_constant
-                            *(p1->mass+p2->mass)/(c*c);
-                        // No route, including a hyperbolic GW impulse, may
-                        // silently delete a widely separated BH component.
-                        if (!(dr<=cutoff*(1.0+1.0e-6))) {
-                            std::cerr<<"BH GW merger rejected outside terminal scale: "
-                                <<p1->id<<" "<<p2->id<<" r="<<dr
-                                <<" cutoff="<<cutoff
-                                <<"; strong encounter requires phase-resolved PN evolution"
-                                <<std::endl;
-                            DATADUMP("dump_bh_gw_unresolved");
-                            abort();
-                        }
-                    }
-#endif
 #if defined(BSE_BASE) && defined(FROZEN_BINARY)
                     thawFrozenPair(*p1, *p2, _bin_interrupt.time_now, "merger");
 #endif
@@ -1635,10 +1709,7 @@ public:
                     drdv += (p2->pos[k]-p1->pos[k])*(p2->vel[k]-p1->vel[k]);
 
                 // delayed merger
-                if (peters_pair) {
-                    // Defer to the radiation evolution and compactness gate.
-                }
-                else if (p1->getBinaryInterruptState()== BinaryInterruptState::collision &&
+                if (p1->getBinaryInterruptState()== BinaryInterruptState::collision &&
                     p2->getBinaryInterruptState()== BinaryInterruptState::collision &&
                     (p1->time_interrupt<_bin_interrupt.time_now && p2->time_interrupt<_bin_interrupt.time_now) &&
                     (p1->getBinaryPairID()==p2->id||p2->getBinaryPairID()==p1->id)) {
@@ -1720,21 +1791,15 @@ public:
 
 #ifdef BSE_BASE
 #ifdef BHMERGER
-#pragma omp critical(bhmerger_check)
-{
-                if (peters_pair) {
-                    if (BHGW::evolve(*this, _bin_interrupt, _bin, modify_return))
-                        merge(_bin.r, 0.0, 1.0);
-                }
                 //BHmerger
-                if(!peters_pair && p1->mass>0 && p2->mass>0&&p1->star.kw>=10&&p1->star.kw<15&&p2->star.kw>=10&&p2->star.kw<15){
+                if(p1->mass>0 && p2->mass>0&&p1->star.kw>=10&&p1->star.kw<15&&p2->star.kw>=10&&p2->star.kw<15){
                     int binary_type_p1 = static_cast<int>(p1->getBinaryInterruptState());
                     int binary_type_p2 = static_cast<int>(p2->getBinaryInterruptState());
                     long long int pair_id1 = p1->getBinaryPairID();
                     long long int pair_id2 = p2->getBinaryPairID();
                     bool BHmerger_flag = false;
                     bool BHmergersys_flag=true;
-                    if ((binary_type_p1 != binary_type_p2) || (pair_id1 != p2->id) || (pair_id2 != p1->id)) BHmergersys_flag = false;
+                    if (binary_type_p1 != binary_type_p2) BHmergersys_flag = false;
                     else if (bse_manager.isMassTransfer(binary_type_p1)
                                  || bse_manager.isMerger(binary_type_p1)
                                  || bse_manager.isNoRemnant(binary_type_p1)
@@ -1743,55 +1808,22 @@ public:
                             BHmergersys_flag = false;
                     if(BHmergersys_flag)
                     {
-                        Float semi = _bin.semi;
-                        if(semi>0){
-                            Float ecc  = _bin.ecc;
-
-                            Float m1 = p1->mass;
-                            Float m2 = p2->mass;
-                            Float period = _bin.period;
-                            Float speed_of_light=bse_manager.getSpeedOfLight();
-                            Float G_0=gravitational_constant;
-                            Float c2 = speed_of_light * speed_of_light;
-                            Float c5 = c2 * c2 * speed_of_light;
-
-                            Float one_minus_e2 = 1.0 - ecc*ecc;
-
-                            Float time_to_merge = (5.0/256.0)* c5 * pow(semi,4)/ (G_0*G_0*G_0 * m1*m2*(m1+m2)) * pow(one_minus_e2, 3.5)/(1.0 + 73.0/24.0*ecc*ecc + 37.0/96.0*pow(ecc,4));
-                            Float ab_time_merger= _bin_interrupt.time_now + time_to_merge;
-                            if((p1->time_merger < 0||p2->time_merger < 0)){//have mot calculated mergertime before and is a binary
-
-                                Float timestep=_bin_interrupt.time_end - _bin_interrupt.time_now;
-                                Float trigger_factor = 1;
-
-
-                                if(time_to_merge < period * trigger_factor){
-                                    BHmerger_flag=true;
-                                    //std::cout << "------merger parameter------ " << std::endl;
-                                    //std::cout << "m = " << m1 << std::endl;
-                                    //std::cout << "c = " << speed_of_light << std::endl;
-                                    //std::cout << "G = " << gravitational_constant << std::endl;
-                                    //std::cout << "e = " << ecc << std::endl;
-                                    //std::cout << "a = " << semi << std::endl;
-                                    //std::cout << "timemerge  = " << time_to_merge << std::endl;
-                                    //std::cout << "period  = " << period << std::endl;
-                                }
-                                else{
-                                    p1->time_merger = ab_time_merger;
-                                    p2->time_merger = p1->time_merger;
-                                }
-                            }
-                            else{
-
-                                if(p1->time_merger < _bin_interrupt.time_now&&p2->time_merger < _bin_interrupt.time_now){
-                                    BHmerger_flag=true;
-                                }
-                                else if(p1->time_merger > ab_time_merger&&p2->time_merger > ab_time_merger){
-                                    p1->time_merger = ab_time_merger;
-                                    p2->time_merger = p1->time_merger;
-                                }
-                            }
-                        }
+                        const bool members_changed = pair_id1 != p2->id
+                                                  || pair_id2 != p1->id;
+                        const bool prediction_missing = p1->time_merger<0.0
+                                                     || p2->time_merger<0.0;
+                        const bool clearly_perturbed =
+                            isBHMergerOrbitClearlyPerturbed(_bin, *p1, *p2);
+                        // Prediction is intentionally outside the critical region.
+                        // Replacing the deadline (rather than taking min) preserves
+                        // the physical possibility that a perturbation delays merger.
+                        if (members_changed || prediction_missing || clearly_perturbed)
+                            refreshBHMergerPrediction(_bin, *p1, *p2,
+                                                      _bin_interrupt.time_now);
+                        BHmerger_flag = p1->time_merger>=0.0
+                                     && p2->time_merger>=0.0
+                                     && std::max(p1->time_merger,p2->time_merger)
+                                        <= _bin_interrupt.time_now;
                     }
 
                     if (p1->mass > 0.0 && p2->mass > 0.0) {
@@ -1800,11 +1832,16 @@ public:
                                                        p1->pos[1] - p2->pos[1],
                                                        p1->pos[2] - p2->pos[2]};
                             Float dr2  = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
-                            merge(std::sqrt(dr2), 0.0, 1.0);
+#pragma omp critical(bhmerger_execute)
+                            {
+                                // Only remnant fitting and particle replacement are
+                                // serialized; deadline checks and predictions are not.
+                                if (p1->mass>0.0 && p2->mass>0.0)
+                                    merge(std::sqrt(dr2), 0.0, 1.0);
+                            }
 
                         }
                     }
-}
                 }
 #endif
                 // tide energy loss

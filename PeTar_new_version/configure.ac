@@ -112,9 +112,9 @@ AX_CHECK_COMPILE_FLAG([-std=c++$with_cpp_std],
 
 # OpenMP
 AC_ARG_ENABLE([openmp],
-              [AS_HELP_STRING([--disable-omp],
+              [AS_HELP_STRING([--disable-openmp],
                               [disable OpenMP support])],
-              [use_omp=no],
+              [use_omp=$enableval],
               [use_omp=yes])
 
 AS_IF([test x"$use_omp" != xno],
@@ -176,15 +176,17 @@ AS_IF([test x"$with_arch" == xfugaku],
 AC_ARG_ENABLE([simd-64],
               [AS_HELP_STRING([--enable-simd-64],
                               [enable x86 SIMD 64 bits floating point support for long-distant tree force])],
-              [PROG_NAME=$PROG_NAME".64b"
-	       use_simd_64=yes],
+              [use_simd_64=$enableval],
               [use_simd_64=no])
+
+AS_IF([test x"$use_simd_64" = xyes],
+      [PROG_NAME=$PROG_NAME".64b"])
 
 # QUAD
 AC_ARG_ENABLE([quad],
               [AS_HELP_STRING([--disable-quad],
                               [disable quadrupole-moment calculation for super particles])],
-              [use_quad=no],
+              [use_quad=$enableval],
               [use_quad=yes])
 
 # collisionless dark matter
@@ -202,7 +204,7 @@ AS_IF([test x"$use_darkmatter" != xno],
 AC_ARG_ENABLE([cuda],
               [AS_HELP_STRING([--enable-cuda],
                               [enable CUDA (GPU) acceleration support for long-distant tree force])],
-              [use_cuda=yes],
+              [use_cuda=$enableval],
               [use_cuda=no])
 
 AC_ARG_WITH([cuda-prefix], 
@@ -259,7 +261,7 @@ AS_IF([test "x$use_cuda" != xno],
 AC_ARG_ENABLE([gperf],
               [AS_HELP_STRING([--enable-gperf],
                               [enable gperftools for profiling])],
-              [use_gperf=yes],
+              [use_gperf=$enableval],
               [use_gperf=no])
 
 AC_ARG_WITH([gperf-prefix], 
@@ -366,7 +368,7 @@ AC_ARG_WITH([interrupt],
 AC_ARG_ENABLE([bhmerger],
               [AS_HELP_STRING([--enable-bhmerger],
                               [enable black hole merger module])],
-              [use_bhmerger=yes],
+              [use_bhmerger=$enableval],
               [use_bhmerger=no])
             
 AS_IF([test x"$use_bhmerger" != xno],
@@ -393,7 +395,7 @@ AS_IF([test x"$use_bhmerger" != xno],
 AC_ARG_ENABLE([frozen-binary],
               [AS_HELP_STRING([--enable-frozen-binary],
                               [enable reversible frozen state for stable hard binaries])],
-              [use_frozen_binary=yes],
+              [use_frozen_binary=$enableval],
               [use_frozen_binary=no])
 
 AS_IF([test x"$use_frozen_binary" != xno],
@@ -571,6 +573,9 @@ AC_MSG_NOTICE([     tidal tensor mode: $with_tidal_tensor])
 AC_MSG_NOTICE([     orbit mode:        $with_orbit])
 AC_MSG_NOTICE([     Using quad:        $use_quad])
 AC_MSG_NOTICE([     Dark matter:       $use_darkmatter])
+AC_MSG_NOTICE([     BH merger:         $use_bhmerger])
+AC_MSG_NOTICE([     Frozen binary:     $use_frozen_binary])
+AC_MSG_NOTICE([     GPerf profiling:   $use_gperf])
 AC_MSG_NOTICE([--Compilers:])
 AC_MSG_NOTICE([     C++ compiler:      $CXX])
 AS_IF([test "x$use_c" == xyes],

@@ -36,6 +36,10 @@ public:
     PS::F64 time_interrupt;
 #ifdef BHMERGER
     PS::F64 time_merger=-1.0;//merger time=-1  by zhujie
+    // Osculating orbit used for the saved merger deadline.  These let the
+    // callback distinguish harmless phase advance from a real perturbation.
+    PS::F64 merger_semi=-1.0;
+    PS::F64 merger_ecc=-1.0;
     PS::F64vec spin;
 #endif
 #ifdef BSE_BASE
@@ -86,6 +90,8 @@ public:
         time_interrupt = 0.0;
 #ifdef BHMERGER
         time_merger = -1.0;
+        merger_semi = -1.0;
+        merger_ecc = -1.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -108,6 +114,8 @@ public:
         time_interrupt = 0.0;
 #ifdef BHMERGER
         time_merger = -1.0;
+        merger_semi = -1.0;
+        merger_ecc = -1.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -129,6 +137,8 @@ public:
         time_record(_time_record), time_interrupt(_time_interrupt), star(_star) {
 #ifdef BHMERGER
         time_merger = -1.0;
+        merger_semi = -1.0;
+        merger_ecc = -1.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -379,6 +389,8 @@ public:
         // MPI ranks.  In particular, a merger remnant's dimensionless Kerr-spin
         // vector is used as an input if that remnant merges again.
         time_merger = din.time_merger;
+        merger_semi = din.merger_semi;
+        merger_ecc = din.merger_ecc;
         spin = din.spin;
 #endif
 #ifdef BSE_BASE

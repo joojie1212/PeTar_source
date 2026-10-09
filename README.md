@@ -56,14 +56,13 @@ Python/NumPy and the bundled `bhmerger/precession-master` remnant-fit code.
 Python is initialized once around the PeTar integration loop, rather than once
 per merger, and merger calls and output are protected for OpenMP/MPI use.
 
-For a bound BH-BH leaf pair, PeTar applies orbit-averaged Peters evolution to
-the current osculating semi-major axis and eccentricity while SDAR continues to
-handle conservative dynamics and perturbations. The remaining inspiral time is
-recomputed at every callback, so widening postpones the merger and unbinding
-cancels the bound inspiral clock. Hyperbolic encounters continue to use the
-encounter prescription. The terminal fitting boundary is
-`a(1+e) <= 10 G(m1+m2)/c^2`; an attempted bound merger outside that scale is
-rejected and dumped instead of silently coalescing.
+For a bound BH-BH leaf pair, BSE is the sole owner of gravitational-wave
+dissipation and evolves the semi-major axis and eccentricity. PeTar does not
+apply a second Peters evolution. After a BSE update, PeTar uses the current
+orbit in the constant-orbit Peters approximation to predict a merger deadline;
+the prediction is refreshed after later perturbations or BSE updates.
+Hyperbolic encounters retain the separate encounter prescription. Only an
+actually due merger serializes remnant fitting and particle replacement.
 
 The BH merger position/velocity handling differs materially from the upstream
 path:
@@ -80,7 +79,7 @@ path:
   `*.bhmerger` output protected by process and thread locks.
 
 This is an operator-split, orbit-averaged prescription, not phase-resolved PN
-integration or a waveform model. The terminal timing, timestep convergence,
+integration or a waveform model. The callback timing, timestep convergence,
 and long-duration production accuracy remain modeling limitations documented
 under `PeTar_new_version/test/`.
 
@@ -170,9 +169,9 @@ Relative to that GitHub commit, this bundle adds or changes:
 - the live, distributed dark-matter component (`darkmatter.hpp`,
   `darkmatter_force.hpp`, configure/build plumbing, I/O, restart, energy,
   Galpy, and regression tests);
-- bound BH-BH Peters evolution, terminal-scale enforcement, clock
-  invalidation/recomputation, CM-preserving remnant placement, recoil/mass-loss
-  momentum accounting, persistent remnant spin, and structured merger output;
+- BSE-owned BH-BH orbital dissipation with approximate merger-time prediction,
+  CM-preserving remnant placement, recoil/mass-loss momentum accounting,
+  persistent remnant spin, and structured merger output;
 - safer embedded-Python lifecycle and stronger validation of remnant-fit return
   values, including a direct/hyperbolic merger path;
 - physical instantaneous-contact gating for ordinary-star BSE mergers and the

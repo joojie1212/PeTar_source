@@ -1411,7 +1411,7 @@ Optional Features:
   --disable-option-checking  ignore unrecognized --enable/--with options
   --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
-  --disable-omp           disable OpenMP support
+  --disable-openmp        disable OpenMP support
   --enable-simd-64        enable x86 SIMD 64 bits floating point support for
                           long-distant tree force
   --disable-quad          disable quadrupole-moment calculation for super
@@ -4334,7 +4334,7 @@ fi
 # Check whether --enable-openmp was given.
 if test ${enable_openmp+y}
 then :
-  enableval=$enable_openmp; use_omp=no
+  enableval=$enable_openmp; use_omp=$enableval
 else $as_nop
   use_omp=yes
 fi
@@ -4733,18 +4733,22 @@ fi
 # Check whether --enable-simd-64 was given.
 if test ${enable_simd_64+y}
 then :
-  enableval=$enable_simd_64; PROG_NAME=$PROG_NAME".64b"
-	       use_simd_64=yes
+  enableval=$enable_simd_64; use_simd_64=$enableval
 else $as_nop
   use_simd_64=no
 fi
 
 
+if test x"$use_simd_64" = xyes
+then :
+  PROG_NAME=$PROG_NAME".64b"
+fi
+
 # QUAD
 # Check whether --enable-quad was given.
 if test ${enable_quad+y}
 then :
-  enableval=$enable_quad; use_quad=no
+  enableval=$enable_quad; use_quad=$enableval
 else $as_nop
   use_quad=yes
 fi
@@ -4770,7 +4774,7 @@ fi
 # Check whether --enable-cuda was given.
 if test ${enable_cuda+y}
 then :
-  enableval=$enable_cuda; use_cuda=yes
+  enableval=$enable_cuda; use_cuda=$enableval
 else $as_nop
   use_cuda=no
 fi
@@ -5132,7 +5136,7 @@ fi
 # Check whether --enable-gperf was given.
 if test ${enable_gperf+y}
 then :
-  enableval=$enable_gperf; use_gperf=yes
+  enableval=$enable_gperf; use_gperf=$enableval
 else $as_nop
   use_gperf=no
 fi
@@ -5896,7 +5900,7 @@ fi
 # Check whether --enable-bhmerger was given.
 if test ${enable_bhmerger+y}
 then :
-  enableval=$enable_bhmerger; use_bhmerger=yes
+  enableval=$enable_bhmerger; use_bhmerger=$enableval
 else $as_nop
   use_bhmerger=no
 fi
@@ -6044,7 +6048,7 @@ fi
 # Check whether --enable-frozen-binary was given.
 if test ${enable_frozen_binary+y}
 then :
-  enableval=$enable_frozen_binary; use_frozen_binary=yes
+  enableval=$enable_frozen_binary; use_frozen_binary=$enableval
 else $as_nop
   use_frozen_binary=no
 fi
@@ -7935,6 +7939,12 @@ printf "%s\n" "$as_me:      orbit mode:        $with_orbit" >&6;}
 printf "%s\n" "$as_me:      Using quad:        $use_quad" >&6;}
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}:      Dark matter:       $use_darkmatter" >&5
 printf "%s\n" "$as_me:      Dark matter:       $use_darkmatter" >&6;}
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}:      BH merger:         $use_bhmerger" >&5
+printf "%s\n" "$as_me:      BH merger:         $use_bhmerger" >&6;}
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}:      Frozen binary:     $use_frozen_binary" >&5
+printf "%s\n" "$as_me:      Frozen binary:     $use_frozen_binary" >&6;}
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}:      GPerf profiling:   $use_gperf" >&5
+printf "%s\n" "$as_me:      GPerf profiling:   $use_gperf" >&6;}
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: --Compilers:" >&5
 printf "%s\n" "$as_me: --Compilers:" >&6;}
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}:      C++ compiler:      $CXX" >&5

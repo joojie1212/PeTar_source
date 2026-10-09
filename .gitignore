@@ -30,16 +30,18 @@
 PeTar_new_version/build/
 PeTar_new_version/bin/
 PeTar_new_version/include/
+
 PeTar_new_version/config.log
 PeTar_new_version/config.status
 PeTar_new_version/autom4te.cache/
+
 PeTar_new_version/Makefile
 PeTar_new_version/bse-interface/Makefile
 PeTar_new_version/bse-interface/petar.bse
 PeTar_new_version/bse-interface/petar.get.init.binary
 PeTar_new_version/bse-interface/petar.mobse
-PeTar_new_version/mobse-interface/Makefile
 PeTar_new_version/mobse-interface/petar.mobse
+PeTar_new_version/galpy-interface/Makefile
 PeTar_new_version/galpy-interface/petar.galpy
 PeTar_new_version/galpy-interface/petar.galpy.help
 PeTar_new_version/galpy-interface/petar.galpy.pot.movie
@@ -51,16 +53,15 @@ PeTar_new_version/galpy-interface/petar.galpy.pot.movie
 **/cache/
 *.log
 
-# Examples and local tide tests excluded from this source bundle
-**/sample/
-**/tidletest/
-
-# Machine-local toolchains, dependency caches, diagnostics, and private manuals
+# Machine-local toolchains, dependency caches, diagnostics, private manuals,
+# and root-level simulation work directories
 cuda-*/
 .deps/
 diagnostics/
-PeTar服务器部署与启动手册.md
-深圳超算二期用户手册*.pdf
+/speedtest/
+/sample/
+/tidletest/
+
 
 # Untracked FDPS planetary-ring benchmark output
 FDPS/sample/c++/planetary_ring/tmp*.dat

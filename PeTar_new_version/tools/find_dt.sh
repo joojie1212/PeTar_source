@@ -73,7 +73,13 @@ fi
 
 if [ -z $dt_base ]; then
     $prefix $pbin -w 0 $opts -i $sfmt -t 0.0 $fname &>check.perf.test.log
-    dt_base=`egrep '^ Tree time step' check.perf.test.log |awk '{OFMT="%.14g"; print $5/4}'`
+    dt_base=`awk '$1=="Tree" && $2=="time" && $3=="step" {OFMT="%.14g"; print $5/4; exit}' check.perf.test.log`
+    if ! awk -v dt="$dt_base" 'BEGIN {exit !(dt ~ /^[0-9.eE+-]+$/ && dt > 0)}'; then
+        echo 'Error: failed to determine a positive tree time step from check.perf.test.log' >&2
+        echo 'The PeTar initialization command failed or its output format is unsupported.' >&2
+        tail -n 80 check.perf.test.log >&2
+        exit 2
+    fi
     echo 'Auto determine dt_base: '$dt_base
     #rm -f check.perf.test.log
 else
@@ -128,4 +134,3 @@ else
     echo 'Fail to check the performance, make sure the options are correct'
     echo 'See check.perf.test.log and check.perf.'$dt'.log for details from the output of petar'
 fi
-
