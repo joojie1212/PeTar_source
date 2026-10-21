@@ -107,7 +107,7 @@ The focused regression covers construction, every reset/clear path, both
 candidate types, zero-mass candidates, and mass-weighted selection:
 
 ```sh
-g++ -std=c++17 -O2 -Wall -Wextra -I SDAR/src SDAR/tests/neighbor_initialization.cpp -o /tmp/sdar-neighbor-test
+g++ -std=c++17 -O2 -Wall -Wextra -fopenmp -I SDAR/src SDAR/tests/neighbor_initialization.cpp -o /tmp/sdar-neighbor-test
 /tmp/sdar-neighbor-test
 ```
 
@@ -126,7 +126,7 @@ The regression directly calls `checkBreak()` with active slots `[0, 2]`,
 both with and without a merger at slot 2, and checks the resulting break list:
 
 ```sh
-g++ -std=c++17 -O1 -g -fsanitize=address,undefined -I SDAR/src SDAR/tests/group_break_mask.cpp -o /tmp/sdar-group-break-test
+g++ -std=c++17 -O1 -g -fopenmp -fsanitize=address,undefined -I SDAR/src SDAR/tests/group_break_mask.cpp -o /tmp/sdar-group-break-test
 /tmp/sdar-group-break-test
 ```
 
@@ -224,6 +224,45 @@ for parameters and safety checks.
 **Current local tests have not shown a significant overall performance
 improvement from frozen mode.** No general speedup is claimed; the feature
 remains optional and requires workload-specific validation.
+
+## Opt-in hard-cluster OpenMP parallelism
+
+The hard-cluster force loops can use the idle threads of the outer
+hard-cluster team without opening a second parallel level for the FDPS tree.
+The feature is opt-in: with no environment variables set the binary keeps the
+serial hard integrator path (the outer cluster loop is still the same OpenMP
+loop as before).
+
+| variable | default | meaning |
+|---|---|---|
+| `PETAR_INNER_THREADS` | 1 | threads for the level-2 loops; 1 disables the feature |
+| `PETAR_OUTER_THREADS` | `OMP_NUM_THREADS` | team size of the per-cluster loop |
+| `PETAR_PAR_MODE=task` | team | reuse the current team with `taskloop` instead of nesting |
+| `PETAR_PAR_H4` / `PETAR_PAR_AR` | 1 | enable the H4 force loop / AR group loop |
+| `PETAR_AR_LPT` | 1 | largest-group-first scheduling for the AR loop |
+| `PETAR_CLUSTER_LPT` | 0 | largest-cluster-first dispatch |
+| `PETAR_PARSTAT` / `PETAR_PHASE_TIMER` | 1 / 0 | diagnostics at exit |
+
+A typical task-mode run on 32 cores:
+
+```sh
+OMP_NUM_THREADS=32 PETAR_PAR_MODE=task \
+PETAR_OUTER_THREADS=32 PETAR_INNER_THREADS=32 \
+PETAR_PAR_H4=1 PETAR_PAR_AR=1 ./petar ...
+```
+
+The patch keeps every floating-point reduction in its original order: H4
+force items are independent, AR groups are computed on private copies and
+committed in ascending group order, and energy/profile counters are accumulated
+per cluster and reduced serially. On the `data.46 + 16 steps` window,
+1/2/4/8/16/32-thread runs are bit-identical in every snapshot and in the
+`Physic:` energy lines. BSE/SSE Fortran calls are serialized with
+`critical(petar_bse_fortran)` because their RNG and scratch state live in
+COMMON blocks; long integrations with active BSE events still cannot be
+promised bit-reproducible across thread counts.
+
+The Hermite force loop now uses OpenMP, so the SDAR regression binaries above
+must be linked with `-fopenmp`.
 
 ## Upstream starting points
 

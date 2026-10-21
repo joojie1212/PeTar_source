@@ -474,10 +474,22 @@ namespace ParticleSimulator{
                 offset_src = 0;
                 offset_dst = n0;
             }
+            // [t6_7] P3: one parallel region per merge LEVEL instead of one per merge.
+            // The old code called MergeSortOmpImpl (which contains "#pragma omp parallel")
+            // n_sort times per level -> ~255 fork-joins per sort, ~1000 per timestep.
+            // std::merge is deterministic, so the sorted result is bitwise identical;
+            // only the work distribution changes.
+#ifdef PARTICLE_SIMULATOR_THREAD_PARALLEL
+#pragma omp parallel for schedule(dynamic,1)
+#endif
             for(int i=0; i<n_sort; i++){
-                MergeSortOmpImpl(src->getPointer(head[i*2+0]+offset_src), src->getPointer(end[i*2+0]+offset_src),
-                                 src->getPointer(head[i*2+1]+offset_src), src->getPointer(end[i*2+1]+offset_src),
-                                 dst->getPointer(head[i*2+0]+offset_dst), pred);
+                std::merge(src->getPointer(head[i*2+0]+offset_src), src->getPointer(end[i*2+0]+offset_src),
+                           src->getPointer(head[i*2+1]+offset_src), src->getPointer(end[i*2+1]+offset_src),
+                           dst->getPointer(head[i*2+0]+offset_dst), pred);
+            }
+            // bookkeeping must stay serial: head[i] = head[2i] aliases head[2j+1] read
+            // by another index j (e.g. i=0 reads head[1] written by i=1).
+            for(int i=0; i<n_sort; i++){
                 head[i] = head[i*2+0];
                 end[i]  = end[i*2+1];
             }

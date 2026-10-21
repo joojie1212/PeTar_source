@@ -926,6 +926,7 @@ public:
 
     //! tree for neighbor searching.
     void treeNeighborSearch() {
+        InnerPar::forceLevel1();   // [PAR v2] 树代码永远只看到 level 1
 #ifdef PROFILE
         profile.tree_nb.start();
         tree_nb.clearNumberOfInteraction();
@@ -1212,6 +1213,7 @@ public:
 
     //! calculate tree solf force
     void treeSoftForce() {
+        InnerPar::forceLevel1();   // [PAR v2] 树代码永远只看到 level 1
 #ifdef PROFILE
         profile.tree_soft.start();
 

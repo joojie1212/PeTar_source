@@ -2,6 +2,7 @@
 
 #include "Common/Float.h"
 #include "Common/list.h"
+#include "Common/inner_parallel.hpp"
 #include "AR/symplectic_integrator.h"
 #include "Hermite/ar_information.h"
 #include "Hermite/hermite_particle.h"
@@ -9,7 +10,10 @@
 #include "Hermite/neighbor.h"
 #include "Hermite/profile.h"
 #include <map>
+#include <algorithm>
+#include <chrono>
 #include <vector>
+#include <utility>
 
 namespace H4{
 
@@ -253,6 +257,7 @@ namespace H4{
         Tpert perturber; // external perturber
         Tinfo info; ///< information of the system
         Profile profile; // profile to measure the status
+        double force_time; // [PHASE] time in calcAccJerkNBList (force phase); SDAR must not depend on FDPS
 
         //! check whether parameters values are correct
         /*! \return true: all correct
@@ -903,9 +908,12 @@ namespace H4{
 #ifdef HERMITE_DEBUG
             Float mcm = 0.0;
 #endif
-            for (int j=0; j<n_member; j++) {
+            // [P2] member 循环切分：
+            //   phase 1（可并行）每个成员算自己的 (force_[kj], neighbors[kj])，彼此独立；
+            //   phase 2（父 task 串行）按 j 升序把 m_j*f_j 累加进 cm 力。
+            //   累加表达式与顺序与原始循环完全一致 => 结果逐位不变。
+            auto memberForce = [&](const int j) {
                 // get particle index from memory address offset
-                //const int kj = int((Tparticle*)member_adr[j]-ptcl);
                 const int kj = _groupi.info.particle_index[j];
                 ASSERT(kj<particles.getSize());
                 ASSERT(kj>=0);
@@ -914,6 +922,20 @@ namespace H4{
                 auto& fkj = force_ptr[kj];
                 auto& nbkj = neighbor_ptr[kj];
                 calcOneSingleAccJerkNB(fkj, nbkj, pkj, _pi.id);
+            };
+            const int n_mem_task = InnerPar::memberTaskCount(n_member);
+            if (n_mem_task>1) {
+                InnerPar::noteMemberRegion(n_member);
+#pragma omp taskloop num_tasks(n_mem_task)
+                for (int j=0; j<n_member; j++) memberForce(j);
+            }
+            else {
+                for (int j=0; j<n_member; j++) memberForce(j);
+            }
+            for (int j=0; j<n_member; j++) {
+                const int kj = _groupi.info.particle_index[j];
+                auto& pkj = *(Tparticle*)member_adr[j];
+                auto& fkj = force_ptr[kj];
 
                 // replace the cm. force with the summation of members
                 _fi.acc0[0] += pkj.mass * fkj.acc0[0]; 
@@ -955,35 +977,93 @@ namespace H4{
                                       const int  _n_single,
                                       const int* _index_group,
                                       const int  _n_group) {
+            const auto _force_t0 = std::chrono::steady_clock::now();
 
             // predictor 
             //auto* ptcl = particles.getDataAddress();
             auto* pred_ptr = pred_.getDataAddress();
             auto* force_ptr = force_.getDataAddress();
             auto* neighbor_ptr = neighbors.getDataAddress();
-            for (int k=0; k<_n_single; k++) {
-                const int i = _index_single[k];
-                auto& pi = pred_ptr[i];
-                auto& fi = force_ptr[i];
-                auto& nbi = neighbor_ptr[i];
-                calcOneSingleAccJerkNB(fi, nbi, pi, pi.id);
-            }
-
-            // for group active particles
             auto* group_ptr = groups.getDataAddress();
-            
-            for (int k=0; k<_n_group; k++) {
-                const int i = _index_group[k];
-                auto& groupi = group_ptr[i];
-                // use predictor of cm
-                auto& pi = pred_ptr[i+index_offset_group_];
-                auto& fi = force_ptr[i+index_offset_group_];
-                if (groupi.particles.cm.mass>0) {
-                    if (groupi.perturber.need_resolve_flag) calcOneGroupMemberAccJerkNB(fi, groupi, pi);
-                    else calcOneGroupCMAccJerkNB(fi, groupi, pi);
+
+            // [PAR] Embarrassingly parallel over the active list: item k only writes
+            // force_[i]/neighbors[i] (or, for a resolved group, the slots of its own
+            // members).  The only cross-item reads are Neighbor::r_neighbor_crit_sq
+            // and Neighbor::initial_step_flag, both of which are written outside this
+            // routine only (calcDt2ndList / correctAndCalcDt4thList /
+            // checkGroupResolve), so there is no data race.
+            // The two original loops are merged into one flat loop so that a single
+            // fork/join covers all active singles and groups of a synchronization step.
+            // No floating point operation is reordered -> bit-identical results.
+            const int n_tot = _n_single + _n_group;
+            const int n_inner = InnerPar::nFor(n_tot, 32, InnerPar::use_h4);
+            if (n_inner>1) InnerPar::noteRegion(n_tot);
+            // [PAR v3 task] 在调用线程已位于 parallel region 内时，用 taskloop
+            // 把 item 切成 task，交给**现有 team**执行；不创建嵌套 team。
+            auto body_raw = [&](int k) {
+                if (k<_n_single) {
+                    const int i = _index_single[k];
+                    auto& pi = pred_ptr[i];
+                    auto& fi = force_ptr[i];
+                    auto& nbi = neighbor_ptr[i];
+                    calcOneSingleAccJerkNB(fi, nbi, pi, pi.id);
                 }
-                else calcOneSingleAccJerkNB(fi, groupi.perturber, pi, pi.id);
+                else {
+                    const int i = _index_group[k-_n_single];
+                    auto& groupi = group_ptr[i];
+                    // use predictor of cm
+                    auto& pi = pred_ptr[i+index_offset_group_];
+                    auto& fi = force_ptr[i+index_offset_group_];
+                    if (groupi.particles.cm.mass>0) {
+                        if (groupi.perturber.need_resolve_flag) calcOneGroupMemberAccJerkNB(fi, groupi, pi);
+                        else calcOneGroupCMAccJerkNB(fi, groupi, pi);
+                    }
+                    else calcOneSingleAccJerkNB(fi, groupi.perturber, pi, pi.id);
+                }
+            };
+            // [P2 诊断] item 级计时：回答"是否有一个巨型 resolved group 的 member 循环
+            // 单独决定了 region 的临界路径"。PETAR_PARSTAT=1 时生效。
+            double _tsub[64] = {0.0};      // [P2 诊断] 每个线程在本 region 的 item 时间小计
+            const int _nth_max = omp_get_max_threads();
+            auto body = [&](int k) {
+                if (!InnerPar::stat_on || !InnerPar::item_stat) { body_raw(k); return; }
+                const double _t0 = omp_get_wtime();
+                body_raw(k);
+                const double _dt = omp_get_wtime() - _t0;
+                const int _myth = omp_get_thread_num();
+                if (_myth<64) _tsub[_myth] += _dt;        // 每个线程只写自己的槽位，无原子
+                int kind = 0;
+                int nm = 1;
+                if (k>=_n_single) {
+                    auto& g = group_ptr[_index_group[k-_n_single]];
+                    nm = g.particles.getSize();
+                    kind = (g.particles.cm.mass>0 && g.perturber.need_resolve_flag) ? 1 : 2;
+                }
+                InnerPar::noteItem(kind, nm, _dt, n_tot);
+                // 本次调用后邻居表已建好，用它的规模做"代价"的代理量
+                long long n_nb = 1;
+                if (kind==0) n_nb = (long long)neighbor_ptr[_index_single[k]].neighbor_address.getSize();
+                else if (kind==2) n_nb = (long long)group_ptr[_index_group[k-_n_single]].perturber.neighbor_address.getSize();
+                InnerPar::noteItemNeighbor(n_nb, _dt);
+            };
+            if (InnerPar::use_tasks && omp_get_level() > 0 && n_inner > 1) {
+                const int n_task = InnerPar::h4TaskCount(n_tot);
+#pragma omp taskloop num_tasks(n_task)
+                for (int k=0; k<n_tot; k++) body(k);
             }
+            else {
+#pragma omp parallel for schedule(dynamic,1) if(n_inner>1) num_threads(n_inner)
+                for (int k=0; k<n_tot; k++) body(k);
+            }
+            const auto _force_t1 = std::chrono::steady_clock::now();
+            if (InnerPar::stat_on && InnerPar::item_stat) {
+                double _sum_item_reg = 0.0;
+                for (int it=0; it<64 && it<_nth_max; it++) _sum_item_reg += _tsub[it];
+                const double _wall_reg = std::chrono::duration<double>(_force_t1-_force_t0).count();
+                InnerPar::noteRegionWall(_wall_reg);
+                InnerPar::noteRegionSize(n_tot, _wall_reg, _sum_item_reg);
+            }
+            force_time += std::chrono::duration<double>(_force_t1-_force_t0).count();
         }
 
         //! reduce one group cm step by half and sort index dt group 
@@ -2201,6 +2281,8 @@ namespace H4{
             int* index_single = index_dt_sorted_single_.getDataAddress();
 
             auto* ptcl = particles.getDataAddress();
+            // NOTE: main initializes every Neighbor slot in initialSystemSingle()
+            // (before addGroups), so no blanket reset is needed here.
             for(int i=0; i<n_init_single_; i++){
                 int k = index_single[i];
                 ptcl[k].acc0[0] = ptcl[k].acc0[1] = ptcl[k].acc0[2] = 0.0;
@@ -2344,7 +2426,280 @@ namespace H4{
             const int i_start = interrupt_group_dt_sorted_group_index_>=0 ? interrupt_group_dt_sorted_group_index_ : 0;
             std::vector<int> interrupt_index_dt_group_list(n_group_tot);
             int n_interrupt_change_dt=0;
+            const double _t_arc0 = InnerPar::stat_on ? omp_get_wtime() : 0.0;   // [PAR] 诊断
 
+            // [PAR] Intra-cluster parallelism of the group loop.
+            //  * every group integrates on its own private copy of its members and
+            //    only reads perturber state, which is not written back until after
+            //    this loop => no data race on particle data, and the result does not
+            //    depend on the order in which groups are processed
+            //  * the shared mutable state (profile counters, energy accumulators,
+            //    merger list, interrupt bookkeeping) is touched only when a group is
+            //    interrupted, which is rare, so one critical section is enough
+            //  * detect-interrupt == 2 needs the sequential early-return semantics of
+            //    the original loop, so that case keeps the serial path
+            //  * no floating point operation is reordered within a group => the
+            //    dynamics is bit-identical to the serial code
+            const int n_inner_grp = InnerPar::use_tasks ? 1
+                : InnerPar::nFor(n_group_tot-i_start, 4, InnerPar::use_ar);
+            // ------------------------------------------------------------------
+            // [P1 2026-10-18] AR 组循环 task 化：compute / commit 两相分离
+            //
+            // phase 1（可并行）：每组在**自己的私有 AR 拷贝**上积分到 time_next，
+            //   把 (中断状态 / 能量修正量 / dt 是否改变) 写进本组独占的 results 槽位。
+            //   组 k 只读写 groups[k] 和 force_/time_next_ 的 k 槽位，跨组无依赖。
+            // phase 2（串行）：按 i 升序把结果提交给共享状态（profile、energy_、
+            //   merger 列表、中断索引表、interrupt_binary_）。
+            //   能量累加严格按 i 升序、pot 先 kin 后 => 与串行循环逐位相同；
+            //   这与 v2 的 team 分支不同（那个在 critical 里累加，顺序随调度变）。
+            //
+            // 约束与前提：
+            //  * detect-interrupt == 2 是"提前 return + 断点重排"的顺序语义，仍走串行；
+            //  * Fortran BSE 的 RNG/scratch 在 COMMON 块里，跨线程不安全，已在
+            //    ar_interaction.hpp 用 critical(petar_bse_fortran) 串行化；因此
+            //    RNG 取号顺序仍依赖调度 => 含 BSE 事件的长时间积分不能指望逐位可复现；
+            //  * 只有 task 模式（PETAR_PAR_MODE=task）走这条路径。
+            // ------------------------------------------------------------------
+            struct GroupStepResult {
+                AR::InterruptBinary<Tparticle> interrupt;
+                Float de_pot;
+                Float de_kin;
+                int   n_step;
+                int   n_step_tsyn;
+                bool  change_dt;
+                GroupStepResult(): interrupt(), de_pot(0.0), de_kin(0.0),
+                                   n_step(0), n_step_tsyn(0), change_dt(false) {}
+                bool hasInterrupt() const {
+                    return interrupt.status!=AR::InterruptStatus::none;
+                }
+            };
+
+            //! phase 1：只碰 groups[k] 与本组私有槽位
+            auto computeGroupStep = [&](const int i, GroupStepResult& res) {
+                const int k = index_dt_sorted_group_[i];
+
+#ifdef HERMITE_DEBUG
+                ASSERT(table_group_mask_[k]==false);
+                if (i!=interrupt_group_dt_sorted_group_index_)
+                    ASSERT(abs(groups[k].getTime()-time_)<=ar_manager->time_error_max);
+#endif
+                // get ds estimation
+                groups[k].info.calcDsAndStepOption(ar_manager->step.getOrder(),
+                    ar_manager->interaction.gravitational_constant, ar_manager->ds_scale);
+
+                // group integration (只写 groups[k] 与 res)
+                res.interrupt = groups[k].integrateToTime(time_next);
+                res.n_step = groups[k].profile.step_count;
+                res.n_step_tsyn = groups[k].profile.step_count_tsyn;
+                res.change_dt = false;
+                res.de_pot = 0.0;
+                res.de_kin = 0.0;
+                if (!res.hasInterrupt()) return;
+
+                // particle cm is the old cm in original frame
+                auto& pcm = groups[k].particles.cm;
+                ASSERT(!groups[k].particles.isOriginFrame());
+
+                if (res.interrupt.status!=AR::InterruptStatus::merge
+                    &&res.interrupt.status!=AR::InterruptStatus::destroy) {
+                    // set initial step flag
+                    groups[k].perturber.initial_step_flag=true;
+                    if (pcm.time + pcm.dt > time_next) {
+                        // set cm step to reach time_next
+                        pcm.dt = time_next - pcm.time;
+                        time_next_[k+index_offset_group_] = time_next;
+                        res.change_dt = true;
+                    }
+                }
+
+                // correct cm potential energy
+                auto& bink = groups[k].info.getBinaryTreeRoot();
+                Float dm = bink.mass - pcm.mass;
+                res.de_pot = force_[k+index_offset_group_].pot*dm;
+
+                // correct kinetic energy of cm
+                auto& vcm = pcm.vel;
+                auto& vbin = bink.vel;
+                auto& vbin_bk = groups[k].info.vcm_record;
+                Float de_kin = 0.5*dm*(vcm[0]*vcm[0]+vcm[1]*vcm[1]+vcm[2]*vcm[2]);
+                Float dvbin[3] = {vbin[0] - vbin_bk[0], vbin[1] - vbin_bk[1], vbin[2] - vbin_bk[2]};
+                de_kin += bink.mass*(dvbin[0]*vcm[0]+dvbin[1]*vcm[1]+dvbin[2]*vcm[2]);
+                res.de_kin = de_kin;
+
+                // back up vcm for later on perturbation kinetic energy correction
+                vbin_bk[0] = vbin[0];
+                vbin_bk[1] = vbin[1];
+                vbin_bk[2] = vbin[2];
+
+                // update particle dm, velocity should not change to be consistent with frame
+                pcm.mass += dm;
+            };
+
+            //! phase 2：按 i 升序提交；返回 true 表示 detect-interrupt==2 需要提前返回
+            auto commitGroupStep = [&](const int i, const GroupStepResult& res) -> bool {
+                profile.ar_step_count += res.n_step;
+                profile.ar_step_count_tsyn += res.n_step_tsyn;
+                // 串行语义：循环结束时 interrupt_binary_ 保存最后一个组的结果
+                interrupt_binary_ = res.interrupt;
+                if (!res.hasInterrupt()) {
+                    ASSERT(abs(groups[index_dt_sorted_group_[i]].getTime()-time_next)
+                           <=ar_manager->time_error_max);
+                    return false;
+                }
+                const int k = index_dt_sorted_group_[i];
+                if (res.interrupt.status==AR::InterruptStatus::merge
+                    ||res.interrupt.status==AR::InterruptStatus::destroy) {
+                    index_group_merger_.addMember(k);
+                }
+                else if (res.change_dt) {
+                    ASSERT(i>=n_act_group_);
+                    interrupt_index_dt_group_list[n_interrupt_change_dt++] = i;
+                }
+
+                energy_.de_cum += res.de_pot;
+                energy_.de_binary_interrupt += res.de_pot;
+                energy_sd_.de_cum += res.de_pot;
+                energy_sd_.de_binary_interrupt += res.de_pot;
+                energy_.de_cum += res.de_kin;
+                energy_.de_binary_interrupt += res.de_kin;
+                energy_sd_.de_cum += res.de_kin;
+                energy_sd_.de_binary_interrupt += res.de_kin;
+
+                if (ar_manager->interrupt_detection_option==2) { // quit integration
+                    interrupt_group_dt_sorted_group_index_ = i;
+                    ASSERT(time_next - res.interrupt.time_now + ar_manager->time_error_max >= 0.0);
+                    return true;
+                }
+                ASSERT(abs(groups[k].getTime()-time_next)<=ar_manager->time_error_max);
+                return false;
+            };
+
+            const int n_work_grp = n_group_tot - i_start;
+            if (InnerPar::stat_on) InnerPar::noteArCall(n_work_grp);
+            const int n_task_grp = InnerPar::arTaskCount(n_work_grp, 1);   // 阈值由 PETAR_AR_MINWORK 定
+            if (n_task_grp>1 && ar_manager->interrupt_detection_option!=2 && omp_get_level()>0) {
+                InnerPar::noteArRegion(n_work_grp);
+                std::vector<GroupStepResult> results(n_work_grp);
+                std::vector<int> order(n_work_grp);
+                for (int ii=0; ii<n_work_grp; ii++) order[ii]=ii;
+                if (InnerPar::use_lpt) {
+                    // 大组优先（LPT）：taskloop 按迭代区间连续切分，代价降序 =>
+                    // 最大的组落在最前面的 task，从源头压掉尾部
+                    std::sort(order.begin(), order.end(), [&](const int a, const int b) {
+                        const int na = groups[index_dt_sorted_group_[i_start+a]].particles.getSize();
+                        const int nb = groups[index_dt_sorted_group_[i_start+b]].particles.getSize();
+                        return (na!=nb) ? (na>nb) : (a<b);
+                    });
+                }
+                GroupStepResult* pres = results.data();
+                const int* porder = order.data();
+                // 隐式 taskgroup：循环结束后所有 task 一定完成，phase 2 才能开始
+#pragma omp taskloop num_tasks(n_task_grp)
+                for (int t=0; t<n_work_grp; t++) {
+                    const int ii = porder[t];
+                    computeGroupStep(i_start+ii, pres[ii]);
+                }
+                for (int ii=0; ii<n_work_grp; ii++)
+                    commitGroupStep(i_start+ii, pres[ii]);
+            }
+            else if (n_inner_grp>1 && ar_manager->interrupt_detection_option!=2) {
+                bool any_interrupt = false;
+                AR::InterruptBinary<Tparticle> interrupt_binary_last;
+                interrupt_binary_last.clear();
+                // merger 必须按串行循环的顺序（i 升序）加入，否则同一同步步里多个
+                // merger 的处理顺序会变，结果就不再逐位可复现
+                std::vector<std::pair<int,int>> merger_pairs; ///< (i, group index k)
+#pragma omp parallel for schedule(dynamic,1) num_threads(n_inner_grp)
+                for (int i=i_start; i<n_group_tot; i++) {
+                    const int k = index_dt_sorted_group_[i];
+                    // get ds estimation
+                    groups[k].info.calcDsAndStepOption(ar_manager->step.getOrder(), ar_manager->interaction.gravitational_constant, ar_manager->ds_scale);
+
+                    // group integration (private result)
+                    AR::InterruptBinary<Tparticle> interrupt_here = groups[k].integrateToTime(time_next);
+                    const int n_step_here = groups[k].profile.step_count;
+                    const int n_step_tsyn_here = groups[k].profile.step_count_tsyn;
+
+                    ASSERT(abs(groups[k].getTime()-time_next)<=ar_manager->time_error_max);
+
+                    if (interrupt_here.status==AR::InterruptStatus::none) {
+                        profile.ar_step_count += n_step_here;
+                        profile.ar_step_count_tsyn += n_step_tsyn_here;
+                        continue;
+                    }
+
+#pragma omp critical(ar_group_bookkeeping)
+                    {
+                        profile.ar_step_count += n_step_here;
+                        profile.ar_step_count_tsyn += n_step_tsyn_here;
+
+                        any_interrupt = true;
+                        interrupt_binary_last = interrupt_here;
+
+                        // particle cm is the old cm in original frame
+                        auto& pcm = groups[k].particles.cm;
+
+                        if (interrupt_here.status==AR::InterruptStatus::merge||interrupt_here.status==AR::InterruptStatus::destroy) {
+                            merger_pairs.push_back(std::pair<int,int>(i,k));
+                        }
+                        else {
+                            // set initial step flag
+                            groups[k].perturber.initial_step_flag=true;
+
+                            if (pcm.time + pcm.dt >time_next) {
+                                // set cm step to reach time_next
+                                pcm.dt = time_next - pcm.time;
+                                time_next_[k+index_offset_group_] = time_next;
+                                // recored index in index_dt_sort of the interrupt case for moving later
+                                interrupt_index_dt_group_list[n_interrupt_change_dt++] = i;
+                            }
+                        }
+
+                        // correct cm potential energy
+                        auto& bink = groups[k].info.getBinaryTreeRoot();
+                        Float dm = bink.mass - pcm.mass;
+                        Float de_pot = force_[k+index_offset_group_].pot*dm;
+                        energy_.de_cum += de_pot;
+                        energy_.de_binary_interrupt += de_pot;
+                        energy_sd_.de_cum += de_pot;
+                        energy_sd_.de_binary_interrupt += de_pot;
+
+                        // correct kinetic energy of cm
+                        auto& vcm = pcm.vel;
+                        auto& vbin = bink.vel;
+                        auto& vbin_bk = groups[k].info.vcm_record;
+                        Float de_kin = 0.5*dm*(vcm[0]*vcm[0]+vcm[1]*vcm[1]+vcm[2]*vcm[2]);
+                        Float dvbin[3] = {vbin[0] - vbin_bk[0], vbin[1] - vbin_bk[1], vbin[2] - vbin_bk[2]};
+                        de_kin += bink.mass*(dvbin[0]*vcm[0]+dvbin[1]*vcm[1]+dvbin[2]*vcm[2]);
+                        energy_.de_cum += de_kin;
+                        energy_.de_binary_interrupt += de_kin;
+                        energy_sd_.de_cum += de_kin;
+                        energy_sd_.de_binary_interrupt += de_kin;
+
+                        // back up vcm for later on perturbation kinetic energy correction
+                        vbin_bk[0] = vbin[0];
+                        vbin_bk[1] = vbin[1];
+                        vbin_bk[2] = vbin[2];
+
+                        // update particle dm, velocity should not change to be consistent with frame
+                        pcm.mass += dm;
+                    }
+                }
+
+                if (any_interrupt) interrupt_binary_ = interrupt_binary_last;
+                // both collections were filled in nondeterministic order; restore the
+                // ascending-i order that the serial code produces, so that the outcome
+                // stays bit-for-bit reproducible
+                if (n_interrupt_change_dt>1)
+                    std::sort(interrupt_index_dt_group_list.begin(),
+                              interrupt_index_dt_group_list.begin()+n_interrupt_change_dt);
+                if (!merger_pairs.empty()) {
+                    std::sort(merger_pairs.begin(), merger_pairs.end());
+                    for (size_t im=0; im<merger_pairs.size(); im++)
+                        index_group_merger_.addMember(merger_pairs[im].second);
+                }
+            }
+            else {
             for (int i=i_start; i<n_group_tot; i++) {
                 const int k = index_dt_sorted_group_[i];
 
@@ -2431,6 +2786,19 @@ namespace H4{
                 }
 
                 ASSERT(abs(groups[k].getTime()-time_next)<=ar_manager->time_error_max);
+            }
+            }
+
+            if (InnerPar::stat_on) { // [PAR] 诊断：空组循环 vs 真正有组要积分
+              const double _dt_arc = omp_get_wtime()-_t_arc0;
+              if (n_group_tot>0) {
+#pragma omp atomic
+                  InnerPar::t_ar_work += _dt_arc;
+              }
+              else {
+#pragma omp atomic
+                  InnerPar::t_ar_empty += _dt_arc;
+              }
             }
 
             // update index_dt_sorted_group_ due to the change of dt

@@ -4,6 +4,7 @@
 #include <vector>
 #include "Common/Float.h"
 #include "Common/binary_tree.h"
+#include "Common/inner_parallel.hpp"   // [PAR] InnerPar 计数器 + omp.h
 #include "changeover.hpp"
 #include "AR/force.h"
 #include "hard_ptcl.hpp"
@@ -840,6 +841,12 @@ public:
 #ifdef BSE_BASE
         // SSE/BSE stellar evolution
         if (_p.time_interrupt<=_time_end&&stellar_evolution_option>0) {
+            // [PAR] Fortran BSE/SSE 的 RNG 与 scratch 存在 COMMON 块里，跨线程不安全。
+            // AR 组循环 task 化后，所有 Fortran 演化调用与事件日志必须互斥；
+            // 这个分支只在演化到期时进入，串行化代价可忽略。
+            int bse_ret_flag = 0;
+#pragma omp critical(petar_bse_fortran)
+            {
             ASSERT(bse_manager.checkParams());
 
             int modify_flag = 1;
@@ -920,7 +927,9 @@ public:
                 modify_flag = 3;
             }
 
-            return modify_flag;
+            bse_ret_flag = modify_flag;
+            }
+            return bse_ret_flag;
         }
 
 #endif // BSE_BASE
@@ -1295,6 +1304,12 @@ public:
                     Float dt = _bin_interrupt.time_now - std::max(p1->time_record,p2->time_record);
                     ASSERT(dt>0);
 
+                    // [PAR] 从这里开始才真正调用 Fortran BSE（evolveBinary）并写事件日志；
+                    // 上面"把两个成员先演化到同一时刻"的 modifyOneParticle 自带同名
+                    // critical，OpenMP 的 critical 不可重入，所以必须放在它之后。
+#pragma omp critical(petar_bse_fortran)
+                    {
+
                     StarParameterOut out[2];
                     _bin.calcOrbit(gravitational_constant);
                     Float ecc = _bin.ecc;
@@ -1532,6 +1547,7 @@ public:
                                                   _bin_interrupt.time_now);
 #endif
                     }
+                }
                 }
             }
 #endif // BSE_BASE

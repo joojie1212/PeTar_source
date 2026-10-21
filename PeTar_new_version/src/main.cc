@@ -9,6 +9,9 @@ int main(int argc, char *argv[]){
     assert(std::isnan(NAN));
 #endif
 
+    // [PAR] enable nested hard-force parallelism before the first parallel region
+    InnerPar::init();
+
     PeTar::initialFDPS(argc,argv);
 
     PeTar petar;
