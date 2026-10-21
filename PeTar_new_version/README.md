@@ -1293,6 +1293,34 @@ For users looking to restart a simulation and automatically determine the new tr
 petar.find.dt -m 2 -o 4 -a "-p input.par -r 0 --r-search-min 0 --r-bin 0" [restart snapshot filename]
 ```
 
+### Automatic hard-cluster reoptimization request
+
+PeTar can be configured to stop cleanly after a completed snapshot when the
+isolated hard-cluster integration remains dominant:
+
+```shell
+./configure --enable-hard-reopt [other configure options]
+```
+
+The runtime monitor is disabled unless all three options are supplied with
+valid values:
+
+```shell
+petar --hard-reopt-ratio 0.9 --hard-reopt-windows 3 \
+      --hard-reopt-cooldown 10 [other options] [input]
+```
+
+At every snapshot, the maximum MPI-rank-local `PP_cluster/Total` ratio is
+checked. After the requested number of consecutive high-ratio profile windows,
+PeTar writes `[output prefix].hard_reopt` and exits normally through its cleanup
+path with status 42. For a restart snapshot, the first `--hard-reopt-cooldown`
+profile windows are ignored. An external supervisor should require both status
+42 and a valid request file, run `petar.find.dt`, and restart from the snapshot
+named in that file. See `sample/hard_reopt_1013_new_4.sh` for an example.
+
+All three options default to `-1`, which disables the monitor. Partial
+configuration is rejected. The monitor requires snapshot output (`-w 1`).
+
 ### Gathering Output Files
 
 In MPI usage, each MPI processor generates individual data files with filenames containing the suffix `[MPI rank]`. To consolidate these output files from different MPI ranks into a single file, the `petar.data.gether` tool is utilized. Additionally, this tool can split the stellar evolution event files and group files into individual components, enabling the use of Python tools for data analysis (refer to [Output files](#output-files)).

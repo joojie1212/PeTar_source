@@ -420,6 +420,18 @@ AC_ARG_ENABLE([frozen-binary],
 AS_IF([test x"$use_frozen_binary" != xno],
       [OPTFLAGS=$OPTFLAGS" -DFROZEN_BINARY"
        DEBFLAGS=$DEBFLAGS" -DFROZEN_BINARY"])
+
+# Stop cleanly at a completed snapshot when the isolated hard-cluster profile
+# remains dominant, so an external supervisor can re-run petar.find.dt.
+AC_ARG_ENABLE([hard-reopt],
+              [AS_HELP_STRING([--enable-hard-reopt],
+                              [enable snapshot-window PP_cluster/Total monitoring and controlled reoptimization exit])],
+              [use_hard_reopt=$enableval],
+              [use_hard_reopt=no])
+
+AS_IF([test x"$use_hard_reopt" != xno],
+      [OPTFLAGS=$OPTFLAGS" -DHARD_REOPT"
+       DEBFLAGS=$DEBFLAGS" -DHARD_REOPT"])
 # external potential
 AC_ARG_WITH([external],
 	    [AS_HELP_STRING([--with-external],
@@ -530,6 +542,7 @@ AC_SUBST([use_gperf])
 #zhujie
 AC_SUBST([use_bhmerger])
 AC_SUBST([use_frozen_binary])
+AC_SUBST([use_hard_reopt])
 
 AC_SUBST([with_debug])
 AC_SUBST([with_step_mode])
@@ -594,6 +607,7 @@ AC_MSG_NOTICE([     Using quad:        $use_quad])
 AC_MSG_NOTICE([     Dark matter:       $use_darkmatter])
 AC_MSG_NOTICE([     BH merger:         $use_bhmerger])
 AC_MSG_NOTICE([     Frozen binary:     $use_frozen_binary])
+AC_MSG_NOTICE([     Hard reopt:        $use_hard_reopt])
 AC_MSG_NOTICE([     GPerf profiling:   $use_gperf])
 AC_MSG_NOTICE([--Compilers:])
 AC_MSG_NOTICE([     C++ compiler:      $CXX])

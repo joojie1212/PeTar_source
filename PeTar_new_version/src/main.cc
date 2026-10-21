@@ -84,8 +84,14 @@ int main(int argc, char *argv[]){
     // ==================== BHMERGER-ZJ: stop embedded Python end =====================
 #endif
 
+    int process_exit_code = 0;
+#ifdef HARD_REOPT
+    if (petar.isHardReoptRequested())
+        process_exit_code = PeTar::getHardReoptExitCode();
+#endif
+
     PeTar::finalizeFDPS();
 
-    return 0;
+    return process_exit_code;
 
 }

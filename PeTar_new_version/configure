@@ -677,6 +677,7 @@ with_external
 with_interrupt
 with_step_mode
 with_debug
+use_hard_reopt
 use_frozen_binary
 use_bhmerger
 use_gperf
@@ -775,6 +776,7 @@ with_step_mode
 with_interrupt
 enable_bhmerger
 enable_frozen_binary
+enable_hard_reopt
 with_external
 with_tidal_tensor
 with_orbit
@@ -1424,6 +1426,8 @@ Optional Features:
   --enable-bhmerger       enable black hole merger module
   --enable-frozen-binary  enable reversible frozen state for stable hard
                           binaries
+  --enable-hard-reopt     enable snapshot-window PP_cluster/Total monitoring
+                          and controlled reoptimization exit
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -6108,6 +6112,23 @@ then :
   OPTFLAGS=$OPTFLAGS" -DFROZEN_BINARY"
        DEBFLAGS=$DEBFLAGS" -DFROZEN_BINARY"
 fi
+
+# Stop cleanly at a completed snapshot when the isolated hard-cluster profile
+# remains dominant, so an external supervisor can re-run petar.find.dt.
+# Check whether --enable-hard-reopt was given.
+if test ${enable_hard_reopt+y}
+then :
+  enableval=$enable_hard_reopt; use_hard_reopt=$enableval
+else $as_nop
+  use_hard_reopt=no
+fi
+
+
+if test x"$use_hard_reopt" != xno
+then :
+  OPTFLAGS=$OPTFLAGS" -DHARD_REOPT"
+       DEBFLAGS=$DEBFLAGS" -DHARD_REOPT"
+fi
 # external potential
 
 
@@ -7933,6 +7954,7 @@ VERSION=$petar_version'_'$sdar_version
 
 
 
+
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: ----------------------Configure Summary--------------------" >&5
 printf "%s\n" "$as_me: ----------------------Configure Summary--------------------" >&6;}
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: --Features:" >&5
@@ -7992,6 +8014,8 @@ printf "%s\n" "$as_me:      Dark matter:       $use_darkmatter" >&6;}
 printf "%s\n" "$as_me:      BH merger:         $use_bhmerger" >&6;}
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}:      Frozen binary:     $use_frozen_binary" >&5
 printf "%s\n" "$as_me:      Frozen binary:     $use_frozen_binary" >&6;}
+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}:      Hard reopt:        $use_hard_reopt" >&5
+printf "%s\n" "$as_me:      Hard reopt:        $use_hard_reopt" >&6;}
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}:      GPerf profiling:   $use_gperf" >&5
 printf "%s\n" "$as_me:      GPerf profiling:   $use_gperf" >&6;}
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: --Compilers:" >&5

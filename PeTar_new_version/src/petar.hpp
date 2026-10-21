@@ -24,8 +24,14 @@
 #include<string>
 #include<sstream>
 #include<cstdlib>
+#include<cmath>
+#include<cstdio>
 //#include<unistd.h>
 #include<getopt.h>
+
+#if defined(HARD_REOPT) && !defined(PROFILE)
+#error "HARD_REOPT requires PROFILE"
+#endif
 
 #ifdef MPI_DEBUG
 #include <mpi.h>
@@ -153,6 +159,11 @@ public:
     IOParams<PS::S64> adjust_group_write_option;
 #endif
     IOParams<PS::S64> append_switcher;
+#ifdef HARD_REOPT
+    IOParams<PS::F64> hard_reopt_ratio;
+    IOParams<PS::S64> hard_reopt_windows;
+    IOParams<PS::S64> hard_reopt_cooldown;
+#endif
     IOParams<std::string> fname_snp;
     IOParams<std::string> fname_par;
     IOParams<std::string> fname_inp;
@@ -237,6 +248,11 @@ public:
                      adjust_group_write_option(input_par_store, 1, "write-group-info", "Print new and end of groups: 0: no print; 1: print to file [data filename prefix].group.[MPI rank] if -w >0"),
 #endif
                      append_switcher(input_par_store, 1, "a", "Data output style: 0 - create new output files and overwrite existing ones except snapshots; 1 - append new data to existing files"),
+#ifdef HARD_REOPT
+                     hard_reopt_ratio(input_par_store, -1.0, "hard-reopt-ratio", "PP_cluster/Total threshold for requesting external timestep reoptimization (-1: disabled)"),
+                     hard_reopt_windows(input_par_store, -1, "hard-reopt-windows", "Consecutive snapshot profile windows above the threshold (-1: disabled)"),
+                     hard_reopt_cooldown(input_par_store, -1, "hard-reopt-cooldown", "Snapshot profile windows ignored after loading a restart snapshot (-1: disabled)"),
+#endif
                      fname_snp(input_par_store, "data", "f", "Prefix of filenames for output data: [prefix].**"),
                      fname_par(input_par_store, "input.par", "p", "Input parameter file (this option should be used first before any other options)"),
                      fname_inp(input_par_store, "__NONE__", "snap-filename", "Input data file", NULL, false),
@@ -298,6 +314,11 @@ public:
 #ifdef DARKMATTER
             {fname_dm_inp.key,          required_argument, &petar_flag, 27},
             {fname_dm_snp.key,          required_argument, &petar_flag, 28},
+#endif
+#ifdef HARD_REOPT
+            {hard_reopt_ratio.key,       required_argument, &petar_flag, 29},
+            {hard_reopt_windows.key,     required_argument, &petar_flag, 30},
+            {hard_reopt_cooldown.key,    required_argument, &petar_flag, 31},
 #endif
             {"help",                  no_argument, 0, 'h'},        
             {0,0,0,0}
@@ -477,6 +498,23 @@ public:
                 case 28:
                     fname_dm_snp.value = optarg;
                     if(print_flag) fname_dm_snp.print(std::cout);
+                    opt_used += 2;
+                    break;
+#endif
+#ifdef HARD_REOPT
+                case 29:
+                    hard_reopt_ratio.value = atof(optarg);
+                    if(print_flag) hard_reopt_ratio.print(std::cout);
+                    opt_used += 2;
+                    break;
+                case 30:
+                    hard_reopt_windows.value = atoll(optarg);
+                    if(print_flag) hard_reopt_windows.print(std::cout);
+                    opt_used += 2;
+                    break;
+                case 31:
+                    hard_reopt_cooldown.value = atoll(optarg);
+                    if(print_flag) hard_reopt_cooldown.print(std::cout);
                     opt_used += 2;
                     break;
 #endif
@@ -690,6 +728,24 @@ public:
         assert(frozen_radius_factor.value>1.0);
         assert(frozen_ecc_limit.value>=0.0 && frozen_ecc_limit.value<1.0);
 #endif
+#ifdef HARD_REOPT
+        const bool hard_reopt_disabled = hard_reopt_ratio.value==-1.0
+            && hard_reopt_windows.value==-1 && hard_reopt_cooldown.value==-1;
+        const bool hard_reopt_enabled = hard_reopt_ratio.value>0.0
+            && hard_reopt_ratio.value<=1.0 && hard_reopt_windows.value>=1
+            && hard_reopt_cooldown.value>=0;
+        if (!hard_reopt_disabled && !hard_reopt_enabled) {
+            std::cerr<<"Error: hard reoptimization requires either all defaults (-1), or "
+                     <<"0 < --hard-reopt-ratio <= 1, --hard-reopt-windows >= 1, "
+                     <<"and --hard-reopt-cooldown >= 0.\n";
+            std::exit(2);
+        }
+        if (hard_reopt_enabled && write_style.value!=1) {
+            std::cerr<<"Error: hard reoptimization requires -w 1 so a restart snapshot "
+                     <<"exists before controlled exit.\n";
+            std::exit(2);
+        }
+#endif
         return true;
     }
 
@@ -728,6 +784,12 @@ public:
     FDPSProfile  tree_soft_profile;
     FDPSProfile  tree_nb_profile;
     std::ofstream fprofile;
+#endif
+#ifdef HARD_REOPT
+    static constexpr int hard_reopt_exit_code = 42;
+    PS::S64 hard_reopt_high_window_count;
+    PS::S64 hard_reopt_cooldown_remaining;
+    bool hard_reopt_requested;
 #endif
 
     Status stat;
@@ -818,6 +880,10 @@ public:
 #ifdef PROFILE
         // profile
         dn_loop(0), profile(), n_count(), n_count_sum(), tree_soft_profile(), fprofile(), 
+#endif
+#ifdef HARD_REOPT
+        hard_reopt_high_window_count(0), hard_reopt_cooldown_remaining(0),
+        hard_reopt_requested(false),
 #endif
         stat(), fstatus(), time_kick(0.0),
         escaper(), fesc(),
@@ -2434,6 +2500,98 @@ public:
         dn_loop=0;
     }
 
+#ifdef HARD_REOPT
+    bool hardReoptEnabled() const {
+        return input_parameters.hard_reopt_ratio.value>0.0
+            && input_parameters.hard_reopt_ratio.value<=1.0
+            && input_parameters.hard_reopt_windows.value>=1
+            && input_parameters.hard_reopt_cooldown.value>=0;
+    }
+
+    //! Check one completed snapshot/profile window and request a clean exit.
+    void checkHardReoptimization() {
+        if (!hardReoptEnabled() || hard_reopt_requested) return;
+
+        if (hard_reopt_cooldown_remaining>0) {
+            if (input_parameters.print_flag) {
+                std::cout<<"HARD_REOPT_COOLDOWN time="<<stat.time
+                         <<" remaining="<<hard_reopt_cooldown_remaining-1
+                         <<std::endl;
+            }
+            hard_reopt_cooldown_remaining--;
+            hard_reopt_high_window_count=0;
+            return;
+        }
+
+        PS::F64 local_ratio=0.0;
+        if (dn_loop>0 && profile.total.time>0.0) {
+            local_ratio=profile.hard_isolated.time/profile.total.time;
+            if (!std::isfinite(local_ratio) || local_ratio<0.0) local_ratio=0.0;
+        }
+        const PS::F64 ratio=PS::Comm::getMaxValue(local_ratio);
+        if (ratio>=input_parameters.hard_reopt_ratio.value)
+            hard_reopt_high_window_count++;
+        else
+            hard_reopt_high_window_count=0;
+
+        if (input_parameters.print_flag) {
+            std::cout<<"HARD_REOPT_WINDOW time="<<stat.time
+                     <<" pp_cluster_ratio="<<ratio
+                     <<" threshold="<<input_parameters.hard_reopt_ratio.value
+                     <<" consecutive="<<hard_reopt_high_window_count
+                     <<" required="<<input_parameters.hard_reopt_windows.value
+                     <<std::endl;
+        }
+
+        if (hard_reopt_high_window_count<input_parameters.hard_reopt_windows.value)
+            return;
+
+        PS::S32 request_file_ok=1;
+        const std::string snapshot=input_parameters.fname_snp.value+"."
+            +std::to_string(file_header.nfile);
+        const std::string request=input_parameters.fname_snp.value+".hard_reopt";
+        if (my_rank==0) {
+            const std::string temporary=request+".tmp";
+            std::ofstream fout(temporary.c_str(), std::ofstream::out|std::ofstream::trunc);
+            if (!fout) request_file_ok=0;
+            else {
+                fout<<std::setprecision(17)
+                    <<"version=1\n"
+                    <<"time="<<stat.time<<"\n"
+                    <<"snapshot="<<snapshot<<"\n"
+                    <<"pp_cluster_ratio="<<ratio<<"\n"
+                    <<"threshold="<<input_parameters.hard_reopt_ratio.value<<"\n"
+                    <<"consecutive_windows="<<hard_reopt_high_window_count<<"\n"
+                    <<"exit_code="<<hard_reopt_exit_code<<"\n";
+                fout.close();
+                if (!fout || std::rename(temporary.c_str(), request.c_str())!=0)
+                    request_file_ok=0;
+            }
+        }
+        request_file_ok=PS::Comm::getMinValue(request_file_ok);
+        if (!request_file_ok) {
+            if (input_parameters.print_flag)
+                std::cerr<<"Error: failed to write hard reoptimization request file; "
+                         <<"continuing the simulation.\n";
+            hard_reopt_high_window_count=0;
+            return;
+        }
+
+        hard_reopt_requested=true;
+        if (input_parameters.print_flag) {
+            std::cout<<"HARD_REOPT_TRIGGER time="<<stat.time
+                     <<" snapshot="<<snapshot
+                     <<" pp_cluster_ratio="<<ratio
+                     <<" exit_code="<<hard_reopt_exit_code
+                     <<std::endl;
+        }
+        PS::Comm::barrier();
+    }
+
+    bool isHardReoptRequested() const { return hard_reopt_requested; }
+    static int getHardReoptExitCode() { return hard_reopt_exit_code; }
+#endif
+
     //! output profile data
     void printProfile() {
 
@@ -2887,6 +3045,10 @@ public:
 
 #ifdef PROFILE
         fout<<"Calculate profile\n";
+#endif
+
+#ifdef HARD_REOPT
+        fout<<"Enable controlled hard-cluster reoptimization exit\n";
 #endif
 
 #ifdef GPU_PROFILE
@@ -3670,6 +3832,10 @@ public:
 
         // check restart
         bool restart_flag = file_header.nfile; // nfile = 0 is assumed as initial data file
+#ifdef HARD_REOPT
+        if (hardReoptEnabled() && restart_flag)
+            hard_reopt_cooldown_remaining=input_parameters.hard_reopt_cooldown.value;
+#endif
 
         // set id_offset
 #ifdef PETAR_DEBUG
@@ -4093,7 +4259,14 @@ public:
                     profile.total.end();
 
                     printProfile();
+#ifdef HARD_REOPT
+                    checkHardReoptimization();
+#endif
                     clearProfile();
+
+#ifdef HARD_REOPT
+                    if (hard_reopt_requested) return 0;
+#endif
 
                     PS::Comm::barrier();
                     profile.total.start();
@@ -4349,7 +4522,14 @@ public:
                 profile.total.end();
 
                 printProfile();
+#ifdef HARD_REOPT
+                checkHardReoptimization();
+#endif
                 clearProfile();
+
+#ifdef HARD_REOPT
+                if (hard_reopt_requested) return 0;
+#endif
 
                 PS::Comm::barrier();
                 profile.total.start();
