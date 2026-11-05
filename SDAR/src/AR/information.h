@@ -365,7 +365,9 @@ namespace AR {
         /*! @param[in] _fout: FILE type file for output
          */
         void writeBinary(FILE *_fout) const {
-            fwrite(&ds, sizeof(int),1,_fout);
+            const unsigned int format = 0x41524932; // ARI2
+            fwrite(&format, sizeof(format), 1, _fout);
+            fwrite(&ds, sizeof(ds),1,_fout);
             fwrite(&time_offset, sizeof(Float),1,_fout);
             fwrite(&r_break_crit, sizeof(Float),1,_fout);
             fwrite(&fix_step_option, sizeof(FixStepOption),1,_fout);
@@ -375,7 +377,12 @@ namespace AR {
         /*! @param[in] _fin: FILE type file for reading
          */
         void readBinary(FILE *_fin) {
-            size_t rcount = fread(&ds, sizeof(int),1,_fin);
+            unsigned int format = 0;
+            if (fread(&format, sizeof(format), 1, _fin) != 1 || format != 0x41524932) {
+                std::cerr << "Unsupported AR Information binary format (expected ARI2)\n";
+                abort();
+            }
+            size_t rcount = fread(&ds, sizeof(ds),1,_fin);
             if (rcount<1) {
                 std::cerr<<"Error: Data reading fails! requiring data number is 1, only obtain "<<rcount<<".\n";
                 abort();

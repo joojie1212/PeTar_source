@@ -167,7 +167,9 @@ public:
         
         // stability check
         // inclination between inner and outer orbit
-        PS::F64 incline=std::acos(std::min(1.0, _bout.am*_bin.am/std::sqrt((_bout.am*_bout.am)*(_bin.am*_bin.am))));
+        const PS::F64 incline_ratio = _bout.am*_bin.am/std::sqrt((_bout.am*_bout.am)*(_bin.am*_bin.am));
+        if (!std::isfinite(incline_ratio)) return false;
+        PS::F64 incline=std::acos(std::max(-1.0, std::min(1.0, incline_ratio)));
         PS::F64 stab3 = stable3body(_bin, _bout, incline, _t_crit, _is_cm_in_first);
         if(stab3>1) {
             // Unstable case
@@ -262,8 +264,12 @@ public:
     
         // stability check
         // inclination between inner and outer orbit
-        PS::F64 incl1=std::acos(std::min(1.0, _bout.am*_bin1.am/std::sqrt((_bout.am*_bout.am)*(_bin1.am*_bin1.am))));
-        PS::F64 incl2=std::acos(std::min(1.0, _bout.am*_bin2.am/std::sqrt((_bout.am*_bout.am)*(_bin2.am*_bin2.am))));
+        const PS::F64 incl1_ratio = _bout.am*_bin1.am/std::sqrt((_bout.am*_bout.am)*(_bin1.am*_bin1.am));
+        if (!std::isfinite(incl1_ratio)) return false;
+        PS::F64 incl1=std::acos(std::max(-1.0, std::min(1.0, incl1_ratio)));
+        const PS::F64 incl2_ratio = _bout.am*_bin2.am/std::sqrt((_bout.am*_bout.am)*(_bin2.am*_bin2.am));
+        if (!std::isfinite(incl2_ratio)) return false;
+        PS::F64 incl2=std::acos(std::max(-1.0, std::min(1.0, incl2_ratio)));
         PS::F64 stab3_1 = stable3body(_bin1, _bout, incl1, _t_crit, true);
         PS::F64 stab3_2 = stable3body(_bin2, _bout, incl2, _t_crit, false);
         if(stab3_1>0.8||stab3_2>0.8) {

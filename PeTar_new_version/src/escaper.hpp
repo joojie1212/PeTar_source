@@ -19,7 +19,11 @@ public:
             // check energy
             // Specific kinetic energy is v^2 / 2.  Keep this consistent
             // with the energy correction applied when an escaper is removed.
-            PS::F64 kin = 0.5*(_p.vel*_p.vel);
+            PS::F64vec energy_vel = _p.vel;
+#ifdef RECORD_CM_IN_HEADER
+            energy_vel += _pcm.vel;
+#endif
+            PS::F64 kin = 0.5*(energy_vel*energy_vel);
             PS::F64 tot = _p.pot_tot + kin;
             if (tot<0) is_escape=false;
         }

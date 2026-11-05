@@ -529,7 +529,9 @@ def inspiral_precav(theta1=None, theta2=None, deltaphi=None,deltachi=None, kappa
      
         assert np.sum(u == 0) <= 1 and np.sum(u[1:-1] == 0) == 0, "There can only be one a=np.inf location, either at the beginning or at the end."
        
+        cyclesign_initial = 1
         if theta1 is not None and theta2 is not None and deltaphi is not None and kappa is None and chieff is None:
+                 cyclesign_initial = np.sign(deltaphi) if deltaphi != 0 else 1
                  deltachi, kappa, chieff = angles_to_conserved(theta1=theta1, theta2=theta2, deltaphi=deltaphi,a=a[0],e=e, q=q,chi1=chi1, chi2=chi2)
         # User provides kappa, chieff, and maybe deltachi.
         elif theta1 is None and theta2 is None and deltaphi is None and kappa is not None and chieff is not None:
@@ -564,9 +566,9 @@ def inspiral_precav(theta1=None, theta2=None, deltaphi=None,deltachi=None, kappa
             if any(x in requested_outputs for x in ['theta1', 'theta2', 'deltaphi', 'deltachi']):
                 #print(kappa, a,e,u)
                 deltachi = deltachisampling(kappa, a,e, tiler(chieff,u), tiler(q,u),tiler(chi1,u),tiler(chi2,u), precomputedroots=np.stack([deltachiminus,deltachiplus,deltachi3]))
-                # Compute the angles. Assign random cyclesign
+                # Compute the angles while preserving the signed initial spin phase.
                 if any(x in requested_outputs for x in ['theta1', 'theta2', 'deltaphi']):
-                    theta1,theta2,deltaphi = conserved_to_angles(deltachi, kappa, a,e, tiler(chieff,u), tiler(q,u),tiler(chi1,u),tiler(chi2,u), cyclesign = np.random.choice([-1, 1], u.shape))
+                    theta1,theta2,deltaphi = conserved_to_angles(deltachi, kappa, a,e, tiler(chieff,u), tiler(q,u),tiler(chi1,u),tiler(chi2,u), cyclesign=np.full(u.shape, cyclesign_initial))
 
         return theta1, theta2, deltaphi, deltachi, kappa, a, e, uc,u, deltachiminus, deltachiplus, deltachi3, chieff, q, chi1, chi2
     # Here I force dtype=object buse the outputs have different shapes

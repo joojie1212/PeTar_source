@@ -1281,26 +1281,28 @@ namespace ParticleSimulator{
         S64 nj_tmp = 0;
         S64 n_interaction_ep_ep_tmp = 0;
         for(S32 i=0; i<Comm::getNumberOfThread(); i++) n_cell_open_[i] = 0;
-        F64 offset_walk_tree,offset_dispatch;
+        F64 walk_time = 0.0, dispatch_time = 0.0;
 
         if(n_ipg > 0){
 #ifdef PARTICLE_SIMULATOR_THREAD_PARALLEL
-#pragma omp parallel for schedule(dynamic, 4) reduction(+ : ni_tmp, nj_tmp, n_interaction_ep_ep_tmp)
+#pragma omp parallel for schedule(dynamic, 4) reduction(+ : ni_tmp, nj_tmp, n_interaction_ep_ep_tmp, walk_time, dispatch_time)
 #endif
             for(S32 i=0; i<n_ipg; i++){
-                offset_walk_tree = GetWtime();
+                const F64 offset_walk_tree = GetWtime();
                 const S32 ith = Comm::getThreadNum();
                 epj_for_force_[ith].clearSize();
                 adr_epj_for_force_[ith].clearSize();
                 makeInteractionList(i);
-                time_profile_.calc_force__core__walk_tree += GetWtime() - offset_walk_tree;
+                walk_time += GetWtime() - offset_walk_tree;
                 ni_tmp += ipg_[i].n_ptcl_;
                 nj_tmp += epj_for_force_[Comm::getThreadNum()].size();
                 n_interaction_ep_ep_tmp += ipg_[i].n_ptcl_ * epj_for_force_[Comm::getThreadNum()].size();
-                offset_dispatch = GetWtime();
+                const F64 offset_dispatch = GetWtime();
                 calcForceOnly( pfunc_ep_ep, i, clear);
-                time_profile_.calc_force__core__dispatch += GetWtime() - offset_dispatch;
+                dispatch_time += GetWtime() - offset_dispatch;
             }
+            time_profile_.calc_force__core__walk_tree += walk_time;
+            time_profile_.calc_force__core__dispatch += dispatch_time;
             ni_ave_ = ni_tmp / n_ipg;
             nj_ave_ = nj_tmp / n_ipg;
             n_interaction_ep_ep_ += n_interaction_ep_ep_tmp;

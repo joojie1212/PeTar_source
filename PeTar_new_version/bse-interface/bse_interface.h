@@ -1511,6 +1511,8 @@ public:
      */
     int evolveBinary(StarParameter& _star1, StarParameter& _star2, StarParameterOut& _out1, StarParameterOut& _out2, 
                      double& _semi, double& _period, double& _ecc, BinaryEvent& _bse_event, const int& _binary_init_type, const double _dt_nb, double _tide_ecc_limit = -1.0) {
+        const double mass_initial1 = _star1.mt;
+        const double mass_initial2 = _star2.mt;
         double tphys = std::max(_star1.tphys, _star2.tphys);
         double tphysf = _dt_nb*tscale + tphys;
         double dtp=tphysf*100.0+1000.0;
@@ -1528,6 +1530,8 @@ public:
             if (_star1.kw==15 && _star2.kw==15) {
                 _star1.tphys = tphysf;
                 _star2.tphys = tphysf;
+                _out1.dm = _star1.mt - mass_initial1;
+                _out2.dm = _star2.mt - mass_initial2;
                 return 0;
             }
             if (_star1.kw==15) {
@@ -1544,6 +1548,8 @@ public:
             int event_index = 0;
             if (event_flag>0) _bse_event.recordEvent(_star1, _star2, semi_rsun, _ecc, 2, event_index++);
             _bse_event.setEventIndexEnd(event_index);
+            _out1.dm = _star1.mt - mass_initial1;
+            _out2.dm = _star2.mt - mass_initial2;
             return 0;
         }
 
@@ -1559,7 +1565,7 @@ public:
         if (event_flag<0) return event_flag;
 
         int kw[2];
-        double m0[2],mt[2],r[2],lum[2],mc[2],rc[2],menv[2],renv[2],ospin[2],epoch[2],tm[2],vkick[8];
+        double m0[2],mt[2],r[2],lum[2],mc[2],rc[2],menv[2]={0.0,0.0},renv[2]={0.0,0.0},ospin[2],epoch[2],tm[2],vkick[8];
         for (int k =0; k<4; k++) {
             vkick[k]  = _out1.vkick[k];
             vkick[k+4]= _out2.vkick[k];
@@ -1613,13 +1619,13 @@ public:
         _out1.menv = menv[0];
         _out1.renv = renv[0];
         _out1.tm = tm[0];
-        _out1.dm = _star1.mt - _out1.dm;
+        _out1.dm = _star1.mt - mass_initial1;
         _out1.dtmiss = tphysf - _star1.tphys;
 
         _out2.menv = menv[1];
         _out2.renv = renv[1];
         _out2.tm = tm[1];
-        _out2.dm = _star2.mt - _out2.dm;
+        _out2.dm = _star2.mt - mass_initial2;
         _out2.dtmiss = tphysf - _star2.tphys;
 
         for (int k=0; k<4; k++) _out1.vkick[k]=vkick[k];
@@ -1681,7 +1687,7 @@ public:
 #endif
         ) {
 
-        double m0[2],mt[2],r[2],mc[2],rc[2],menv[2],renv[2],ospin[2],age[2],vkick[8];
+        double m0[2],mt[2],r[2],mc[2],rc[2],menv[2]={0.0,0.0},renv[2]={0.0,0.0},ospin[2],age[2],vkick[8];
         int kw[2];
 
         for (int k =0; k<4; k++) {
@@ -1736,7 +1742,7 @@ public:
         bool remnant_zj_success = false;
         if (remnant_zj_input_valid) {
             remnant_zj_success =
-                BHMerger::calculateRemnant(_star1.mt, _star2.mt,
+                BHMerger::calculateRemnant(getMass(_star1), getMass(_star2),
                                            _dr[0], _dr[1], _dr[2],
                                            -_dv[0], -_dv[1], -_dv[2],
                                            _spin1[0], _spin1[1], _spin1[2],
@@ -1877,7 +1883,7 @@ public:
         // mass transfer case
         if (_star1.kw>=10&&_star1.kw<15&&_star2.kw>=10&&_star2.kw<15&&_semi>0.0) {// GR effect
             double semi_rsun = _semi*rscale;
-            dt = std::min(dt, EstimateGRTimescale(_star1, _star2, semi_rsun, _ecc));
+            dt = std::min(dt, EstimateGRTimescale(_star1, _star2, semi_rsun, _ecc)/tscale);
         }
         else if (isMassTransfer(_binary_type)) {
             int kw[2];
@@ -1901,11 +1907,11 @@ public:
             double dtr;
             double semi_rsun = _semi*rscale;
             trflow_(kw,m0,mt,r,mc,rc,age,&dtr,&semi_rsun,&_ecc,zpars);
-            dt = std::min(dt,dtr);
+            dt = std::min(dt,dtr/tscale);
 
         }
         
-        return dt/tscale;
+        return dt;
     }
 
     //! a simple check to determine whether call BSE is necessary by given a reference of time step

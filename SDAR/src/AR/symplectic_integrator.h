@@ -582,20 +582,20 @@ namespace AR {
         Float calcMultiInvRIter(AR::BinaryTree<Tparticle>& _bin){
             Float gt_kick_inv= calcInvR(*_bin.getLeftMember(), *_bin.getRightMember());
             for (int k=0; k<2; k++) { 
-                if (_bini.isMemberTree(k))  // tree - tree
-                    gt_kick_inv *= calcMultiInvRIter(*(_bini.getMemberAsTree(k)));
+                if (_bin.isMemberTree(k))  // tree - tree
+                    gt_kick_inv *= calcMultiInvRIter(*(_bin.getMemberAsTree(k)));
             }
             return gt_kick_inv;
         }
 
         //! calc gt_drift_inv for binary tree
         Float calcGtDriftInvIter(AR::BinaryTree<Tparticle>& _bin){
-            Float gt_drift_inv= calInvR(*_bin.getLeftMember(), *_bin.getRightMember());
+            Float gt_drift_inv= calcInvR(*_bin.getLeftMember(), *_bin.getRightMember());
             for (int k=0; k<2; k++) { 
-                if (_bini.isMemberTree(k))  // tree - tree
-                    gt_kick_inv *= calcMultiInvRIter(*(_bini.getMemberAsTree(k)));
+                if (_bin.isMemberTree(k))  // tree - tree
+                    gt_drift_inv *= calcMultiInvRIter(*(_bin.getMemberAsTree(k)));
             }
-            return gt_kick_inv;
+            return gt_drift_inv;
         }
 #endif
 
@@ -813,7 +813,7 @@ namespace AR {
 
             Float dgt_drift_inv = kickEtotAndGTDriftTreeIter(_dt, vel_cm, sd_factor, bin_root);
 #ifdef AR_TIME_FUNCTION_MULTI_R
-            dgt_drift_inv = calcGTDriftInvIter(bin_root);
+            dgt_drift_inv = calcGtDriftInvIter(bin_root);
 #endif
             gt_drift_inv_ += dgt_drift_inv*_dt;
         }
@@ -1029,7 +1029,7 @@ namespace AR {
 
             for (int i=1; i<=nsd; i++) {
 #ifdef AR_SLOWDOWN_MASSRATIO
-                const Float mass_ratio = manager->slowdown_mass_ref/binary_slowdown[i].bin->mass;
+                const Float mass_ratio = manager->slowdown_mass_ref/binary_slowdown[i]->mass;
 #else 
                 const Float mass_ratio = 1.0;
 #endif
@@ -2132,6 +2132,7 @@ namespace AR {
                                     ekin_ = epot_ = etot_ref_ = 0.0;
 #if (defined AR_SLOWDOWN_ARRAY) || (defined AR_SLOWDOWN_TREE)
                                     de_sd_change_cum_ -= etot_sd_ref_;
+                                    de_sd_change_interrupt_ -= etot_sd_ref_;
                                     dH_sd_change_interrupt_ -= getHSlowDown();
                                     ekin_sd_ = epot_sd_ = etot_sd_ref_ = 0.0;
 #endif                                    

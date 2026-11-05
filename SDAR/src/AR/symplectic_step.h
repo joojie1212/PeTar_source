@@ -335,25 +335,23 @@ namespace AR {
         /*! @param[in] _fout: file IO for write
          */
         void writeBinary(FILE *_fout) {
-            fwrite(this, sizeof(*this),1,_fout);
+            const int header[3] = {0x53595332, sym_order_, sym_type_}; // SYS2
+            fwrite(header, sizeof(int), 3, _fout);
         }
 
-        //! read class data with BINARY format and initial the array
-        /*! @param[in] _fin: file IO for read
-         */
+        //! Read parameters only; process-local pointers are never serialized.
         void readBinary(FILE *_fin) {
-            size_t rcount = fread(this, sizeof(*this), 1, _fin);
-            if (rcount<1) {
-                std::cerr<<"Error: Data reading fails! requiring data number is 1, only obtain "<<rcount<<".\n";
+            int header[3] = {};
+            if (fread(header, sizeof(int), 3, _fin) != 3 || header[0] != 0x53595332
+                || header[1] < 0 || header[1] > 16 || header[1]%2 != 0
+                || (header[1] == 0 ? header[2] != 0
+                    : (header[2] != 1 && !(header[2] == 2 && (header[1] == 6 || header[1] == 8))))) {
+                std::cerr << "Invalid/unsupported SymplecticStep format (expected SYS2)\n";
                 abort();
             }
-
-            ASSERT(sym_type_==1||sym_type_==2);
-            ASSERT(sym_order_>=0);
-            cd_pair_array_size_ = 0;            
-        
-            int sym_n = (sym_type_==2)?-sym_order_:sym_order_;
-            if (sym_order_>0) initialSymplecticCofficients(sym_n);
+            clear();
+            if (header[1] > 0)
+                initialSymplecticCofficients(header[2] == 2 ? -header[1] : header[1]);
         }
 
         //! print parameters

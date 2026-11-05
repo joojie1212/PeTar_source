@@ -200,7 +200,7 @@ public:
 #endif
 
     void writeBinary(FILE* _fout) {
-        fwrite(&ekin, sizeof(EnergyAndMomentum), 1, _fout);
+        fwrite(this, sizeof(*this), 1, _fout);
     }
 
     //! calculate the system kinetic and potential energy of particles

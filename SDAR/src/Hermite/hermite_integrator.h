@@ -2472,10 +2472,9 @@ namespace H4{
 
 #ifdef HERMITE_DEBUG
                 // check whether the new list is consistent with table_group_mask_ 
-                int table_check_mask[n_group_tot];
-                for (int i=0; i<n_group_tot; i++) table_check_mask[i]=0;
+                std::vector<int> table_check_mask(groups.getSize(), 0);
                 for (int i=0; i<index_dt_sorted_group_.getSize(); i++) table_check_mask[index_dt_sorted_group_[i]]++;
-                for (int i=0; i<n_group_tot; i++) {
+                for (int i=0; i<groups.getSize(); i++) {
                     ASSERT((table_check_mask[i]==1&&!table_group_mask_[i])||(table_check_mask[i]==0&&table_group_mask_[i]));
                 }
                 for (int i=0; i<n_act_group_; i++) {

@@ -268,7 +268,9 @@ The snapshot also omits generated Doxygen HTML, all `sample` and `tidletest`
 trees, build products, and run data. FDPS, SDAR, and mcluster are committed as
 ordinary source directories rather than Git submodules so a clone contains the
 required dependency source immediately.
-
+## 对于corecollapse阶段的treestep寻找
+目前的程序的treetimestep并不是动态的，这会导致在corecollapse阶段出现巨大的直接积分组，使得程序运行过慢，目前的方案是在ppcluster/total过大时重新finddt，这需要shell和程序退出互相配合完成积分，具体功能还未测试，未来可以进一步采用动态树时间步来优化这个问题
+10.21
 ## Building PeTar
 
 ### lingsheng SIMD dependency (Arm/NEON)

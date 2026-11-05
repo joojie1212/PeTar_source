@@ -76,7 +76,7 @@
          dtr = tn - age
       else
 *        dt = MAX(0.1d0,age*10.d0)
-         dt = MAX(0.1d0,dt*10.d0)
+         dt = MAX(0.1d0,age*10.d0)
          dt = MIN(dt,5.0d+02)
          dtr = dt
       endif

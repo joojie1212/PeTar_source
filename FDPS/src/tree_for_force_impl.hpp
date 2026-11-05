@@ -22,7 +22,7 @@ PS_OMP_CRITICAL
             if(map_id_to_epj_.empty()){
                 S64 n_epj = epj_sorted_.size();
                 for(S32 i=0; i<n_epj; i++){
-                    if(GetMSB(tp_glb_[i].adr_ptcl_) == 1) continue;
+                    // epj_sorted_ is already compacted: it contains only EPs.
                     Tepj * epj_tmp = epj_sorted_.getPointer(i);
                     S64 id_tmp = epj_tmp->getId();
                     map_id_to_epj_.insert( std::pair<S64, Tepj*>(id_tmp, epj_tmp) );

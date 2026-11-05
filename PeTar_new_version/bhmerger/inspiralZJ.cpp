@@ -6,10 +6,72 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 #include "inspiralZJ.hpp"
 
 namespace {
+
+bool setDoubleKeyword(PyObject* dict, const char* key, double value) {
+    if (!dict || PyErr_Occurred()) return false;
+    PyObject* number = PyFloat_FromDouble(value);
+    if (!number) return false;
+    const int result = PyDict_SetItemString(dict, key, number);
+    Py_DECREF(number);
+    return result == 0;
+}
+
+PyObject* callKeywords(PyObject* function, PyObject* kwargs) {
+    if (!kwargs || PyErr_Occurred()) return nullptr;
+    PyObject* args = PyTuple_New(0);
+    if (!args) return nullptr;
+    PyObject* result = PyObject_Call(function, args, kwargs);
+    Py_DECREF(args);
+    return result;
+}
+
+bool validArray(PyObject* object, npy_intp size) {
+    if (!object || !PyArray_Check(object)) return false;
+    auto* array = reinterpret_cast<PyArrayObject*>(object);
+    if (PyArray_TYPE(array) != NPY_DOUBLE || !PyArray_ISCARRAY_RO(array)
+        || !PyArray_ISNOTSWAPPED(array) || PyArray_SIZE(array) != size) return false;
+    const double* data = static_cast<const double*>(PyArray_DATA(array));
+    for (npy_intp i=0; i<size; ++i) if (!std::isfinite(data[i])) return false;
+    return true;
+}
+
+double arrayValue(PyObject* object, bool two_dimensional) {
+    if (!object || !PyArray_Check(object)) return NAN;
+    auto* array = reinterpret_cast<PyArrayObject*>(object);
+    if (PyArray_NDIM(array) != (two_dimensional ? 2 : 1)
+        || PyArray_DIM(array, 0) < 1
+        || (two_dimensional && PyArray_DIM(array, 1) < 2)) return NAN;
+    char* address = static_cast<char*>(two_dimensional ? PyArray_GETPTR2(array,0,1)
+                                                       : PyArray_GETPTR1(array,0));
+    PyObject* item = PyArray_GETITEM(array, address);
+    if (!item) return NAN;
+    const double value = PyFloat_AsDouble(item);
+    Py_DECREF(item);
+    return value;
+}
+
+bool setStringListKeyword(PyObject* dict, const char* key,
+                          const char* const values[], Py_ssize_t count) {
+    if (!dict || PyErr_Occurred()) return false;
+    PyObject* list = PyList_New(count);
+    if (!list) return false;
+    for (Py_ssize_t i=0; i<count; ++i) {
+        PyObject* value = PyUnicode_FromString(values[i]);
+        if (!value) {
+            Py_DECREF(list);
+            return false;
+        }
+        PyList_SET_ITEM(list, i, value); // steals value
+    }
+    const int result = PyDict_SetItemString(dict, key, list);
+    Py_DECREF(list);
+    return result == 0;
+}
 
 struct InspiralParameters {
     double theta1;
@@ -31,6 +93,168 @@ thread_local InspiralParameters Inspiraloutputs{};
 thread_local BHMerger::RemnantParameters Remnantoutputs{};
 bool bhmerger_python_owned = false;
 PyThreadState* bhmerger_main_thread_state = nullptr;
+
+// Recover the adiabatically evolved constants without requesting a random
+// nutation phase.  If the two physical deltachi roots coalesce, reconstruct
+// the angles at the fitting boundary from the resonant limiting solution.
+bool recoverResonantInspiral(PyObject* module,
+                             const InspiralParameters& encounter,
+                             InspiralParameters& recovered) {
+    if (!module) return false;
+
+    PyObject* inspiral = PyObject_GetAttrString(module, "inspiral_precav");
+    if (!inspiral || !PyCallable_Check(inspiral)) {
+        Py_XDECREF(inspiral);
+        if (PyErr_Occurred()) PyErr_Clear();
+        return false;
+    }
+
+    npy_intp dims[1] = {2};
+    double a_data[2] = {encounter.a, 10.0};
+    PyObject* a_array = PyArray_SimpleNewFromData(1, dims, NPY_DOUBLE, a_data);
+    PyObject* kwargs = PyDict_New();
+    setDoubleKeyword(kwargs, "theta1", encounter.theta1);
+    setDoubleKeyword(kwargs, "theta2", encounter.theta2);
+    setDoubleKeyword(kwargs, "deltaphi", encounter.deltaphi);
+    if (kwargs && a_array) PyDict_SetItemString(kwargs, "a", a_array);
+    setDoubleKeyword(kwargs, "e", encounter.e);
+    setDoubleKeyword(kwargs, "q", encounter.q);
+    setDoubleKeyword(kwargs, "chi1", encounter.chi1);
+    setDoubleKeyword(kwargs, "chi2", encounter.chi2);
+    const char* outputs[] = {
+        "kappa", "a", "e", "uc", "u", "deltachiminus",
+        "deltachiplus", "deltachi3", "chieff", "q", "chi1", "chi2"
+    };
+    setStringListKeyword(kwargs, "requested_outputs", outputs,
+                         static_cast<Py_ssize_t>(sizeof(outputs)/sizeof(outputs[0])));
+
+    PyObject* result = callKeywords(inspiral, kwargs);
+    Py_XDECREF(kwargs);
+    Py_XDECREF(a_array);
+    Py_DECREF(inspiral);
+    if (!result || !PyDict_Check(result)) {
+        Py_XDECREF(result);
+        if (PyErr_Occurred()) PyErr_Clear();
+        return false;
+    }
+
+    InspiralParameters candidate = encounter;
+    candidate.kappa = arrayValue(PyDict_GetItemString(result, "kappa"), true);
+    candidate.a = arrayValue(PyDict_GetItemString(result, "a"), true);
+    candidate.e = arrayValue(PyDict_GetItemString(result, "e"), true);
+    candidate.uc = arrayValue(PyDict_GetItemString(result, "uc"), true);
+    candidate.u = arrayValue(PyDict_GetItemString(result, "u"), true);
+    const double root_minus = arrayValue(
+        PyDict_GetItemString(result, "deltachiminus"), true);
+    const double root_plus = arrayValue(
+        PyDict_GetItemString(result, "deltachiplus"), true);
+    const double root_three = arrayValue(
+        PyDict_GetItemString(result, "deltachi3"), true);
+    candidate.chieff = arrayValue(PyDict_GetItemString(result, "chieff"), false);
+    candidate.q = arrayValue(PyDict_GetItemString(result, "q"), false);
+    candidate.chi1 = arrayValue(PyDict_GetItemString(result, "chi1"), false);
+    candidate.chi2 = arrayValue(PyDict_GetItemString(result, "chi2"), false);
+    Py_DECREF(result);
+    if (PyErr_Occurred()) PyErr_Clear();
+
+    const bool constants_valid =
+        std::isfinite(candidate.kappa) && std::isfinite(candidate.a)
+        && std::isfinite(candidate.e) && std::isfinite(candidate.uc)
+        && std::isfinite(candidate.u) && std::isfinite(candidate.chieff)
+        && std::isfinite(candidate.q) && std::isfinite(candidate.chi1)
+        && std::isfinite(candidate.chi2) && std::isfinite(root_minus)
+        && std::isfinite(root_plus) && std::isfinite(root_three)
+        && candidate.a > 0.0 && candidate.e >= 0.0 && candidate.e < 1.0
+        && candidate.q > 0.0 && candidate.q <= 1.0
+        && candidate.chi1 >= 0.0 && candidate.chi1 <= 1.0
+        && candidate.chi2 >= 0.0 && candidate.chi2 <= 1.0;
+    if (!constants_valid) return false;
+
+    // root_three is not one of the two physical turning points and can become
+    // very large near equal masses; it must not relax this coalescence test.
+    const double root_scale = std::max(
+        {1.0, std::fabs(root_minus), std::fabs(root_plus)});
+    const double root_gap = std::fabs(root_plus-root_minus);
+    const double resonance_tolerance =
+        64.0*std::sqrt(std::numeric_limits<double>::epsilon())*root_scale;
+    if (root_gap > resonance_tolerance) return false;
+
+    PyObject* resonance = PyObject_GetAttrString(module, "deltachiresonance");
+    if (!resonance || !PyCallable_Check(resonance)) {
+        Py_XDECREF(resonance);
+        if (PyErr_Occurred()) PyErr_Clear();
+        return false;
+    }
+    kwargs = PyDict_New();
+    setDoubleKeyword(kwargs, "kappa", candidate.kappa);
+    setDoubleKeyword(kwargs, "a", candidate.a);
+    setDoubleKeyword(kwargs, "e", candidate.e);
+    setDoubleKeyword(kwargs, "chieff", candidate.chieff);
+    setDoubleKeyword(kwargs, "q", candidate.q);
+    setDoubleKeyword(kwargs, "chi1", candidate.chi1);
+    setDoubleKeyword(kwargs, "chi2", candidate.chi2);
+    result = callKeywords(resonance, kwargs);
+    Py_XDECREF(kwargs);
+    Py_DECREF(resonance);
+    if (!validArray(result, 1)) {
+        Py_XDECREF(result);
+        if (PyErr_Occurred()) PyErr_Clear();
+        return false;
+    }
+    candidate.deltachi = *static_cast<double*>(
+        PyArray_DATA(reinterpret_cast<PyArrayObject*>(result)));
+    Py_DECREF(result);
+    const double root_mean = 0.5*(root_minus+root_plus);
+    if (!std::isfinite(candidate.deltachi)
+        || std::fabs(candidate.deltachi-root_mean) > 16.0*resonance_tolerance)
+        return false;
+
+    PyObject* to_angles = PyObject_GetAttrString(module, "conserved_to_angles");
+    if (!to_angles || !PyCallable_Check(to_angles)) {
+        Py_XDECREF(to_angles);
+        if (PyErr_Occurred()) PyErr_Clear();
+        return false;
+    }
+    kwargs = PyDict_New();
+    setDoubleKeyword(kwargs, "deltachi", candidate.deltachi);
+    setDoubleKeyword(kwargs, "kappa", candidate.kappa);
+    setDoubleKeyword(kwargs, "a", candidate.a);
+    setDoubleKeyword(kwargs, "e", candidate.e);
+    setDoubleKeyword(kwargs, "chieff", candidate.chieff);
+    setDoubleKeyword(kwargs, "q", candidate.q);
+    setDoubleKeyword(kwargs, "chi1", candidate.chi1);
+    setDoubleKeyword(kwargs, "chi2", candidate.chi2);
+    setDoubleKeyword(kwargs, "cyclesign", encounter.deltaphi < 0.0 ? -1.0 : 1.0);
+    result = callKeywords(to_angles, kwargs);
+    Py_XDECREF(kwargs);
+    Py_DECREF(to_angles);
+    if (!validArray(result, 3)) {
+        Py_XDECREF(result);
+        if (PyErr_Occurred()) PyErr_Clear();
+        return false;
+    }
+    const double* angles = static_cast<const double*>(
+        PyArray_DATA(reinterpret_cast<PyArrayObject*>(result)));
+    candidate.theta1 = angles[0];
+    candidate.theta2 = angles[1];
+    candidate.deltaphi = angles[2];
+    Py_DECREF(result);
+
+    const double pi = std::acos(-1.0);
+    if (!std::isfinite(candidate.theta1) || !std::isfinite(candidate.theta2)
+        || !std::isfinite(candidate.deltaphi)
+        || candidate.theta1 < 0.0 || candidate.theta1 > pi
+        || candidate.theta2 < 0.0 || candidate.theta2 > pi
+        || candidate.deltaphi < -pi || candidate.deltaphi > pi)
+        return false;
+
+    recovered = candidate;
+    std::fprintf(stderr,
+                 "Recovered near-resonance inspiral at a=%.17g, e=%.17g "
+                 "(deltachi root gap %.3e)\n",
+                 candidate.a, candidate.e, root_gap);
+    return true;
+}
 
 } // namespace
 
@@ -328,9 +552,12 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
     cross(s2, Lvec, s2_cross_l);
     const double projected_norm1 = norm(s1_cross_l);
     const double projected_norm2 = norm(s2_cross_l);
-    double deltaphi = (projected_norm1 > 0.0 && projected_norm2 > 0.0)
-                    ? SAFE_ACOS(dot(s1_cross_l, s2_cross_l)
-                                /(projected_norm1*projected_norm2)) : 0.0;
+    double projected_cross[3];
+    cross(s1_cross_l, s2_cross_l, projected_cross);
+    // precession.eval_cyclesign uses S1 dot (S2 cross L).
+    double deltaphi = (projected_norm1 > 0.0 && projected_norm2 > 0.0 && L > 0.0)
+                    ? std::atan2(dot(projected_cross, Lvec)/L,
+                                 dot(s1_cross_l, s2_cross_l)) : 0.0;
     //printf("\n~~~~ZJ  debug chi1=%f, chi2=%f, theta1=%f,theta2=%f,deltaphi=%f, a0=%f, e=%f,q=%f\n",chi1,chi2,theta1,theta2,deltaphi,a0,e,q );
 
 
@@ -368,29 +595,33 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         npy_intp dims[1] = {2};
         double a_arr_data[2] = {a0, 10.0};
         PyObject *a_array = PyArray_SimpleNewFromData(1, dims, NPY_DOUBLE, a_arr_data);
-        Py_INCREF(a_array);
+
 
         PyObject *kwargs = PyDict_New();
-        PyDict_SetItemString(kwargs, "theta1", PyFloat_FromDouble(theta1));
-        PyDict_SetItemString(kwargs, "theta2", PyFloat_FromDouble(theta2));
-        PyDict_SetItemString(kwargs, "deltaphi", PyFloat_FromDouble(deltaphi));
-        PyDict_SetItemString(kwargs, "a", a_array);
-        PyDict_SetItemString(kwargs, "e", PyFloat_FromDouble(e));
-        PyDict_SetItemString(kwargs, "q", PyFloat_FromDouble(q));
-        PyDict_SetItemString(kwargs, "chi1", PyFloat_FromDouble(chi1));
-        PyDict_SetItemString(kwargs, "chi2", PyFloat_FromDouble(chi2));
+        setDoubleKeyword(kwargs, "theta1", theta1);
+        setDoubleKeyword(kwargs, "theta2", theta2);
+        setDoubleKeyword(kwargs, "deltaphi", deltaphi);
+        if (kwargs && a_array) PyDict_SetItemString(kwargs, "a", a_array);
+        setDoubleKeyword(kwargs, "e", e);
+        setDoubleKeyword(kwargs, "q", q);
+        setDoubleKeyword(kwargs, "chi1", chi1);
+        setDoubleKeyword(kwargs, "chi2", chi2);
 
-        PyObject *result = PyObject_Call(pFunc, PyTuple_New(0), kwargs);
-        Py_DECREF(kwargs);
+        PyObject *result = callKeywords(pFunc, kwargs);
+        Py_XDECREF(kwargs);
         Py_DECREF(pFunc);
-        Py_DECREF(a_array);
+        Py_XDECREF(a_array);
 
-        if (!result) {
-            PyErr_Print();
-            std::fprintf(stderr,
-                         "Call inspiral_precav failed; using encounter-time "
-                         "spin configuration for remnant fit\n");
+        if (!result || !PyDict_Check(result)) {
+            Py_XDECREF(result);
+            if (PyErr_Occurred()) PyErr_Clear();
             Inspiraloutputs = encounter_outputs;
+            inspiral_evolution_valid = recoverResonantInspiral(
+                pModule, encounter_outputs, Inspiraloutputs);
+            if (!inspiral_evolution_valid)
+                std::fprintf(stderr,
+                             "Call inspiral_precav failed; using encounter-time "
+                             "spin configuration for remnant fit\n");
         }
         else {
         // 从结果字典中提取需要的值
@@ -408,24 +639,25 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         PyObject *q_arr      = PyDict_GetItemString(result, "q");
         PyObject *chi1_arr   = PyDict_GetItemString(result, "chi1");
         PyObject *chi2_arr   = PyDict_GetItemString(result, "chi2");
-        Inspiraloutputs.theta1 = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)theta1_arr, PyArray_GETPTR2((PyArrayObject*)theta1_arr,0,1))); 
-        Inspiraloutputs.theta2 = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)theta2_arr, PyArray_GETPTR2((PyArrayObject*)theta2_arr,0,1))); 
-        Inspiraloutputs.deltaphi= PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)deltaphi_arr,PyArray_GETPTR2((PyArrayObject*)deltaphi_arr,0,1)));
-        Inspiraloutputs.deltachi= PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)deltachi_arr,PyArray_GETPTR2((PyArrayObject*)deltachi_arr,0,1))); 
-        Inspiraloutputs.kappa = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)kappa_arr, PyArray_GETPTR2((PyArrayObject*)kappa_arr,0,1))); 
-        Inspiraloutputs.a = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)a_arr, PyArray_GETPTR2((PyArrayObject*)a_arr,0,1))); 
-        Inspiraloutputs.e = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)e_arr, PyArray_GETPTR2((PyArrayObject*)e_arr,0,1))); 
-        Inspiraloutputs.uc = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)uc_arr, PyArray_GETPTR2((PyArrayObject*)uc_arr,0,1))); 
-        Inspiraloutputs.u = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)u_arr, PyArray_GETPTR2((PyArrayObject*)u_arr,0,1))); 
+        Inspiraloutputs.theta1 = arrayValue(theta1_arr, true); 
+        Inspiraloutputs.theta2 = arrayValue(theta2_arr, true); 
+        Inspiraloutputs.deltaphi= arrayValue(deltaphi_arr, true);
+        Inspiraloutputs.deltachi= arrayValue(deltachi_arr, true); 
+        Inspiraloutputs.kappa = arrayValue(kappa_arr, true); 
+        Inspiraloutputs.a = arrayValue(a_arr, true); 
+        Inspiraloutputs.e = arrayValue(e_arr, true); 
+        Inspiraloutputs.uc = arrayValue(uc_arr, true); 
+        Inspiraloutputs.u = arrayValue(u_arr, true); 
         // 这几个是一维数组，取第一个元素 
         
-        Inspiraloutputs.chieff = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)chieff_arr, PyArray_GETPTR1((PyArrayObject*)chieff_arr,0)));
-        Inspiraloutputs.q      = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)q_arr, PyArray_GETPTR1((PyArrayObject*)q_arr,0)));
-        Inspiraloutputs.chi1   = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)chi1_arr, PyArray_GETPTR1((PyArrayObject*)chi1_arr,0)));
-        Inspiraloutputs.chi2   = PyFloat_AsDouble(PyArray_GETITEM((PyArrayObject*)chi2_arr, PyArray_GETPTR1((PyArrayObject*)chi2_arr,0)));
+        Inspiraloutputs.chieff = arrayValue(chieff_arr, false);
+        Inspiraloutputs.q      = arrayValue(q_arr, false);
+        Inspiraloutputs.chi1   = arrayValue(chi1_arr, false);
+        Inspiraloutputs.chi2   = arrayValue(chi2_arr, false);
         Inspiraloutputs.m      = m;
 
         Py_DECREF(result);
+        if (PyErr_Occurred()) PyErr_Clear();
         inspiral_evolution_valid =
             std::isfinite(Inspiraloutputs.theta1)
             && std::isfinite(Inspiraloutputs.theta2)
@@ -436,10 +668,13 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
             && std::isfinite(Inspiraloutputs.chi1)
             && std::isfinite(Inspiraloutputs.chi2);
         if (!inspiral_evolution_valid) {
-            std::fprintf(stderr,
-                         "Non-finite inspiral output; using encounter-time "
-                         "spin configuration for remnant fit\n");
             Inspiraloutputs = encounter_outputs;
+            inspiral_evolution_valid = recoverResonantInspiral(
+                pModule, encounter_outputs, Inspiraloutputs);
+            if (!inspiral_evolution_valid)
+                std::fprintf(stderr,
+                             "Non-finite inspiral output; using encounter-time "
+                             "spin configuration for remnant fit\n");
         }
         }
     }
@@ -468,17 +703,17 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         }
 
         PyObject *kwargs = PyDict_New();
-        PyDict_SetItemString(kwargs, "theta1", PyFloat_FromDouble(Inspiraloutputs.theta1));
-        PyDict_SetItemString(kwargs, "theta2", PyFloat_FromDouble(Inspiraloutputs.theta2));
-        PyDict_SetItemString(kwargs, "q", PyFloat_FromDouble(Inspiraloutputs.q));
-        PyDict_SetItemString(kwargs, "chi1", PyFloat_FromDouble(Inspiraloutputs.chi1));
-        PyDict_SetItemString(kwargs, "chi2", PyFloat_FromDouble(Inspiraloutputs.chi2));
+        setDoubleKeyword(kwargs, "theta1", Inspiraloutputs.theta1);
+        setDoubleKeyword(kwargs, "theta2", Inspiraloutputs.theta2);
+        setDoubleKeyword(kwargs, "q", Inspiraloutputs.q);
+        setDoubleKeyword(kwargs, "chi1", Inspiraloutputs.chi1);
+        setDoubleKeyword(kwargs, "chi2", Inspiraloutputs.chi2);
 
-        PyObject *result = PyObject_Call(pFunc, PyTuple_New(0), kwargs);
-        Py_DECREF(kwargs);
+        PyObject *result = callKeywords(pFunc, kwargs);
+        Py_XDECREF(kwargs);
         Py_DECREF(pFunc);
 
-        if (PyArray_Check(result)) {
+        if (validArray(result, 1)) {
             PyArrayObject *arr = (PyArrayObject*)result;
             Remnantoutputs.mfin = *((double*)PyArray_DATA(arr));
         } else {
@@ -500,18 +735,18 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         }
 
         PyObject *kwargs = PyDict_New();
-        PyDict_SetItemString(kwargs, "theta1", PyFloat_FromDouble(Inspiraloutputs.theta1));
-        PyDict_SetItemString(kwargs, "theta2", PyFloat_FromDouble(Inspiraloutputs.theta2));
-        PyDict_SetItemString(kwargs, "deltaphi", PyFloat_FromDouble(Inspiraloutputs.deltaphi));
-        PyDict_SetItemString(kwargs, "q", PyFloat_FromDouble(Inspiraloutputs.q));
-        PyDict_SetItemString(kwargs, "chi1", PyFloat_FromDouble(Inspiraloutputs.chi1));
-        PyDict_SetItemString(kwargs, "chi2", PyFloat_FromDouble(Inspiraloutputs.chi2));
+        setDoubleKeyword(kwargs, "theta1", Inspiraloutputs.theta1);
+        setDoubleKeyword(kwargs, "theta2", Inspiraloutputs.theta2);
+        setDoubleKeyword(kwargs, "deltaphi", Inspiraloutputs.deltaphi);
+        setDoubleKeyword(kwargs, "q", Inspiraloutputs.q);
+        setDoubleKeyword(kwargs, "chi1", Inspiraloutputs.chi1);
+        setDoubleKeyword(kwargs, "chi2", Inspiraloutputs.chi2);
 
-        PyObject *result = PyObject_Call(pFunc, PyTuple_New(0), kwargs);
-        Py_DECREF(kwargs);
+        PyObject *result = callKeywords(pFunc, kwargs);
+        Py_XDECREF(kwargs);
         Py_DECREF(pFunc);
 
-        if (PyArray_Check(result)) {
+        if (validArray(result, 1)) {
             PyArrayObject *arr = (PyArrayObject*)result;
             Remnantoutputs.spin = *((double*)PyArray_DATA(arr));
             if (!std::isfinite(Remnantoutputs.spin)
@@ -541,20 +776,20 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         }
 
         PyObject *kwargs = PyDict_New();
-        PyDict_SetItemString(kwargs, "theta1", PyFloat_FromDouble(Inspiraloutputs.theta1));
-        PyDict_SetItemString(kwargs, "theta2", PyFloat_FromDouble(Inspiraloutputs.theta2));
-        PyDict_SetItemString(kwargs, "deltaphi", PyFloat_FromDouble(Inspiraloutputs.deltaphi));
-        PyDict_SetItemString(kwargs, "a", PyFloat_FromDouble(Inspiraloutputs.a));
-        PyDict_SetItemString(kwargs, "e", PyFloat_FromDouble(Inspiraloutputs.e));
-        PyDict_SetItemString(kwargs, "q", PyFloat_FromDouble(Inspiraloutputs.q));
-        PyDict_SetItemString(kwargs, "chi1", PyFloat_FromDouble(Inspiraloutputs.chi1));
-        PyDict_SetItemString(kwargs, "chi2", PyFloat_FromDouble(Inspiraloutputs.chi2));
+        setDoubleKeyword(kwargs, "theta1", Inspiraloutputs.theta1);
+        setDoubleKeyword(kwargs, "theta2", Inspiraloutputs.theta2);
+        setDoubleKeyword(kwargs, "deltaphi", Inspiraloutputs.deltaphi);
+        setDoubleKeyword(kwargs, "a", Inspiraloutputs.a);
+        setDoubleKeyword(kwargs, "e", Inspiraloutputs.e);
+        setDoubleKeyword(kwargs, "q", Inspiraloutputs.q);
+        setDoubleKeyword(kwargs, "chi1", Inspiraloutputs.chi1);
+        setDoubleKeyword(kwargs, "chi2", Inspiraloutputs.chi2);
 
-        PyObject *result = PyObject_Call(pFunc, PyTuple_New(0), kwargs);
-        Py_DECREF(kwargs);
+        PyObject *result = callKeywords(pFunc, kwargs);
+        Py_XDECREF(kwargs);
         Py_DECREF(pFunc);
 
-        if (PyArray_Check(result)) {
+        if (validArray(result, 3)) {
             PyArrayObject *arr = (PyArrayObject*)result;
             double *data = (double*)PyArray_DATA(arr);
             Remnantoutputs.spindirection[0] = data[0];
@@ -582,26 +817,28 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         }
 
         PyObject *kwargs = PyDict_New();
-        PyDict_SetItemString(kwargs, "theta1", PyFloat_FromDouble(Inspiraloutputs.theta1));
-        PyDict_SetItemString(kwargs, "theta2", PyFloat_FromDouble(Inspiraloutputs.theta2));
-        PyDict_SetItemString(kwargs, "deltaphi", PyFloat_FromDouble(Inspiraloutputs.deltaphi));
+        setDoubleKeyword(kwargs, "theta1", Inspiraloutputs.theta1);
+        setDoubleKeyword(kwargs, "theta2", Inspiraloutputs.theta2);
+        setDoubleKeyword(kwargs, "deltaphi", Inspiraloutputs.deltaphi);
 
-        PyDict_SetItemString(kwargs, "q", PyFloat_FromDouble(Inspiraloutputs.q));
-        PyDict_SetItemString(kwargs, "chi1", PyFloat_FromDouble(Inspiraloutputs.chi1));
-        PyDict_SetItemString(kwargs, "chi2", PyFloat_FromDouble(Inspiraloutputs.chi2));
+        setDoubleKeyword(kwargs, "q", Inspiraloutputs.q);
+        setDoubleKeyword(kwargs, "chi1", Inspiraloutputs.chi1);
+        setDoubleKeyword(kwargs, "chi2", Inspiraloutputs.chi2);
 
-        PyObject *result = PyObject_Call(pFunc, PyTuple_New(0), kwargs);
-        Py_DECREF(kwargs);
+        PyObject *result = callKeywords(pFunc, kwargs);
+        Py_XDECREF(kwargs);
         Py_DECREF(pFunc);
 
-        if (PyArray_Check(result)) {
+        if (validArray(result, 4)) {
             PyArrayObject *arr = (PyArrayObject*)result;
             double *data = (double*)PyArray_DATA(arr);
             Remnantoutputs.vkick[0] = data[1];
             Remnantoutputs.vkick[1] = data[2];
             Remnantoutputs.vkick[2] = data[3];
         } else {
-            PyErr_Print(); fprintf(stderr, "remnantspindirection failed\n");
+            PyErr_Print(); fprintf(stderr, "remnantkick failed\n");
+            Py_XDECREF(result);
+            CAL_REMNANT_RETURN(false);
         }
         Py_XDECREF(result);
     }

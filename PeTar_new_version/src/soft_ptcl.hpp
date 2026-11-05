@@ -1,4 +1,5 @@
 #pragma once
+#include <cstring>
 #include"ptcl.hpp"
 
 class ForceSoft{
@@ -116,7 +117,11 @@ public:
 #ifdef EXTERNAL_POT_IN_PTCL
         fprintf(fp, "%26.17e ",this->pot_ext);
 #endif        
-        fprintf(fp, "%lld\n",this->n_ngb);
+        fprintf(fp, "%lld",this->n_ngb);
+#ifdef BHMERGER
+        fprintf(fp, " #BHMERGER_V1 %.17g", this->time_merger);
+#endif
+        fprintf(fp, "\n");
     }
 
     void writeBinary(FILE* fp) const{
@@ -146,11 +151,26 @@ public:
             abort();
         }
 #endif
-        rcount=fscanf(fp, "%lld\n", &this->n_ngb);
+        rcount=fscanf(fp, "%lld", &this->n_ngb);
         if (rcount<1) {
             std::cerr<<"Error: FPSoft Data reading fails! requiring data number is 1, only obtain "<<rcount<<".\n";
             std::cerr<<"Check your input data, whether the consistent features (interrupt mode and external mode) are used in configuring petar and the data generation\n";
             abort();
+        }
+        // Optional suffix is line-local; old initial conditions have no suffix.
+#ifdef BHMERGER
+        this->time_merger = -1.0;
+#endif
+        char suffix[256];
+        if (fgets(suffix, sizeof(suffix), fp)) {
+#ifdef BHMERGER
+            const char* marker = std::strstr(suffix, "#BHMERGER_V1");
+            if (marker && (sscanf(marker, "#BHMERGER_V1 %lf", &this->time_merger) != 1
+                           || !std::isfinite(this->time_merger))) {
+                std::cerr << "Invalid BHMERGER_V1 restart deadline" << std::endl;
+                abort();
+            }
+#endif
         }
     }
 

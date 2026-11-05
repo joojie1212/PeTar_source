@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 // FDPS carries massless targets along with sources so LET construction covers
@@ -57,9 +58,13 @@ struct DMGravityKernel {
                     const Source* pj, const PS::S32 nj, DMForce* force) const {
 #if defined(USE_SIMD) && defined(INTRINSIC_X86)
 #if defined(CALC_EP_64bit)
-        static thread_local PhantomGrapeQuad64Bit pg;
+        static thread_local auto pg_owner =
+            std::make_unique<PhantomGrapeQuad64Bit>();
+        auto& pg = *pg_owner;
 #else
-        static thread_local PhantomGrapeQuad pg;
+        static thread_local auto pg_owner =
+            std::make_unique<PhantomGrapeQuad>();
+        auto& pg = *pg_owner;
 #endif
         // Tile both lists; FDPS group/leaf limits may exceed SIMD buffers.
         std::vector<PS::S32> indices;

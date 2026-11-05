@@ -2165,7 +2165,8 @@ public:
     void driveForOneClusterOMP(const PS::F64 _dt) {
         const PS::S32 n = ptcl_hard_.size();
 
-#pragma omp parallel for
+        Float de_kin_total = 0.0;
+#pragma omp parallel for reduction(+:de_kin_total)
         for(PS::S32 i=0; i<n; i++){
             auto& pi = ptcl_hard_[i];
             PS::F64vec dr = pi.vel * _dt;
@@ -2181,10 +2182,7 @@ public:
             if (modify_flag) {
                 auto& v = pi.vel;
                 Float de_kin = 0.5*(pi.mass*(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]) - mbk*(vbk[0]*vbk[0]+vbk[1]*vbk[1]+vbk[2]*vbk[2]));
-                energy.de_sd_change_cum += de_kin;
-                energy.de_sd_change_modify_single += de_kin;
-                energy.de_change_cum += de_kin;
-                energy.de_change_modify_single += de_kin;
+                de_kin_total += de_kin;
             }
             // shift time interrupt in order to get consistent time for stellar evolution in the next drift
             //pi.time_record    -= _dt;
@@ -2215,6 +2213,10 @@ public:
             */
         }
 
+        energy.de_sd_change_cum += de_kin_total;
+        energy.de_sd_change_modify_single += de_kin_total;
+        energy.de_change_cum += de_kin_total;
+        energy.de_change_modify_single += de_kin_total;
         time_origin_ += _dt;
     }
 

@@ -18,7 +18,11 @@ private:
 public:
     Float r_scale_next;   ///> scaling for changeover factor (for next step)
 
-    ChangeOver(): r_in_(-1.0), r_out_(-1.0), norm_(0.0), coff_(0.0), pot_off_(0.0), r_scale_next(1.0) {}
+    ChangeOver(): r_in_(-1.0), r_out_(-1.0), norm_(0.0), coff_(0.0), pot_off_(0.0),
+#ifdef INTEGRATED_CUTOFF_FUNCTION
+        q_(0.0),
+#endif
+        r_scale_next(1.0) {}
 
     //! check whether parameters values are correct
     /*! \return true: all correct
@@ -52,6 +56,9 @@ public:
         norm_    = 1.0/(r_out_-r_in_);
         coff_     = (r_out_-r_in_)/(r_out_+r_in_);
         pot_off_  = (1.0+coff_)/r_out_;
+#ifdef INTEGRATED_CUTOFF_FUNCTION
+        q_ = r_in_/r_out_;
+#endif
 #ifdef CHANGEOVER_DEBUG
         assert(r_in_>0.0);
         assert(r_out_>r_in_);
@@ -70,6 +77,9 @@ public:
         norm_    = 1.0/(_r_out-_r_in);
         coff_     = (_r_out-_r_in)/(_r_out+_r_in);
         pot_off_  = (1.0+coff_)/_r_out;
+#ifdef INTEGRATED_CUTOFF_FUNCTION
+        q_ = r_in_/r_out_;
+#endif
 #ifdef CHANGEOVER_DEBUG
         assert(_r_in>0.0);
         assert(_r_out>_r_in);
@@ -147,8 +157,8 @@ public:
      */
     void readBinary(FILE *_fin) {
         size_t rcount = fread(this, sizeof(Float),2,_fin);
-        if (rcount<1) {
-            std::cerr<<"Error: Data reading fails! requiring data number is 1, only obtain "<<rcount<<".\n";
+        if (rcount!=2) {
+            std::cerr<<"Error: Data reading fails! requiring data number is 2, only obtain "<<rcount<<".\n";
             abort();
         }
         setR(1.0, r_in_, r_out_);

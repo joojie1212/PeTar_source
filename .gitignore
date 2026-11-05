@@ -62,8 +62,8 @@ diagnostics/
 
 /sample/
 /tidletest/
-
-
+/bugs/
+/run_bh_cluster/
 # Untracked FDPS planetary-ring benchmark output
 FDPS/sample/c++/planetary_ring/tmp*.dat
 FDPS/sample/c++/planetary_ring/diff.dat

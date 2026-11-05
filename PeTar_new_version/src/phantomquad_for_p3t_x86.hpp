@@ -13,7 +13,7 @@
 #define _mm512_fnmadd_ps(x,y,z) _mm512_sub_ps(z, _mm512_mul_ps(x,y))
 #endif
 
-class PhantomGrapeQuad{
+class alignas(64) PhantomGrapeQuad{
 public:
     enum{
         //NIMAX = 32768,
@@ -379,8 +379,8 @@ private:
 #endif
             for(int j=0; j<nj; j++) {
 #ifdef AVX_PRELOAD
-                rsjbuf = _mm512_set1_ps(rsearchj[j+1]);
-                jbuf = _mm512_broadcast_f32x4(*(v4sf *)(epjbuf + j+1));
+                rsjbuf = _mm512_set1_ps(rsearchj[((j+1)<nj ? j+1 : j)]);
+                jbuf = _mm512_broadcast_f32x4(*(v4sf *)(epjbuf + ((j+1)<nj ? j+1 : j)));
                 //jbuf = _mm512_broadcast_f32x4(*(__m128 *)(&epjbuf[j+1][0]));
                 v16sf dx = _mm512_sub_ps(xi, xj);
                 v16sf dy = _mm512_sub_ps(yi, yj);
@@ -447,8 +447,8 @@ private:
 #endif
             for(int j=0; j<nj; j++) {
 #ifdef AVX_PRELOAD
-                rsjbuf = _mm512_set1_ps(rsearchj[j+1]);
-                jbuf = _mm512_broadcast_f32x4(*(v4sf *)(epjbuf + j+1));
+                rsjbuf = _mm512_set1_ps(rsearchj[((j+1)<nj ? j+1 : j)]);
+                jbuf = _mm512_broadcast_f32x4(*(v4sf *)(epjbuf + ((j+1)<nj ? j+1 : j)));
                 //jbuf = _mm512_broadcast_f32x4(*(__m128 *)(&epjbuf[j+1][0]));
                 v16sf dx = _mm512_sub_ps(xi, xj);
                 v16sf dy = _mm512_sub_ps(yi, yj);
@@ -568,8 +568,8 @@ private:
 
             v8sf rsj= rsjbuf;
             for(int j=0; j<nj; j++){
-                jbuf = _mm256_broadcast_ps((v4sf *)(epjbuf + j+1));
-                rsjbuf = _mm256_broadcast_ss(rsearchj+j+1);
+                jbuf = _mm256_broadcast_ps((v4sf *)(epjbuf + ((j+1)<nj ? j+1 : j)));
+                rsjbuf = _mm256_broadcast_ss(rsearchj + ((j+1)<nj ? j+1 : j));
 
                 v8sf dx = _mm256_sub_ps(xi, xj);
                 v8sf dy = _mm256_sub_ps(yi, yj);
@@ -636,8 +636,8 @@ private:
             v8sf mj =  _mm256_shuffle_ps(jbuf, jbuf, 0xff);
             v8sf rsj= rsjbuf;
             for(int j=0; j<nj; j++){
-                jbuf = _mm256_broadcast_ps((v4sf *)(epjbuf + j+1));
-                rsjbuf = _mm256_broadcast_ss(rsearchj+j+1);
+                jbuf = _mm256_broadcast_ps((v4sf *)(epjbuf + ((j+1)<nj ? j+1 : j)));
+                rsjbuf = _mm256_broadcast_ss(rsearchj + ((j+1)<nj ? j+1 : j));
 		//jbuf = __builtin_ia32_vbroadcastf128_ps256((v4sf *)(&epjbuf[j+1][0]));
                 v8sf dx = _mm256_sub_ps(xi, xj);
                 v8sf dy = _mm256_sub_ps(yi, yj);
@@ -748,7 +748,7 @@ private:
 #endif
             for(int j=0; j<nj; j++){
 #ifdef AVX_PRELOAD
-                jbuf = _mm512_broadcast_f32x4(*(v4sf *)(epjbuf + j+1));
+                jbuf = _mm512_broadcast_f32x4(*(v4sf *)(epjbuf + ((j+1)<nj ? j+1 : j)));
 		
                 v16sf dx = _mm512_sub_ps(xi, xj);
                 v16sf dy = _mm512_sub_ps(yi, yj);
@@ -817,7 +817,7 @@ private:
             v8sf mj =  _mm256_shuffle_ps(jbuf, jbuf, 0xff);
             
             for(int j=0; j<nj; j++){
-                jbuf = _mm256_broadcast_ps((v4sf *)(epjbuf + j+1));
+                jbuf = _mm256_broadcast_ps((v4sf *)(epjbuf + ((j+1)<nj ? j+1 : j)));
 		
                 v8sf dx = _mm256_sub_ps(xi, xj);
                 v8sf dy = _mm256_sub_ps(yi, yj);
@@ -892,7 +892,7 @@ private:
 				v16sf yj  = _mm512_shuffle_ps(jbuf0, jbuf0, 0x55);
 				v16sf zj  = _mm512_shuffle_ps(jbuf0, jbuf0, 0xaa);
 
-				jbuf0 = _mm512_broadcast_f32x4(*(v4sf *)&spjbuf[j+1][0]);
+				jbuf0 = _mm512_broadcast_f32x4(*(v4sf *)&spjbuf[((j+1)<nj ? j+1 : j)][0]);
 //#ifndef AVX_PRELOAD
 //    			jbuf1 = _mm512_broadcast_f32x4(*(v4sf *)&spjbuf[j+0][1]);
 //#endif
@@ -901,7 +901,7 @@ private:
 				v16sf qzz = _mm512_shuffle_ps(jbuf1, jbuf1, 0xaa);
 				v16sf mj  = _mm512_shuffle_ps(jbuf1, jbuf1, 0xff);
 
-				jbuf1 = _mm512_broadcast_f32x4(*(v4sf *)&spjbuf[j+1][1]);
+				jbuf1 = _mm512_broadcast_f32x4(*(v4sf *)&spjbuf[((j+1)<nj ? j+1 : j)][1]);
 
 //#ifndef AVX_PRELOAD
 //    			jbuf2 = _mm512_broadcast_f32x4(*(v4sf *)&spjbuf[j+0][2]);
@@ -911,7 +911,7 @@ private:
 				v16sf qzx = _mm512_shuffle_ps(jbuf2, jbuf2, 0xaa);
 				v16sf mtr = _mm512_shuffle_ps(jbuf2, jbuf2, 0xff);
                 
-				jbuf2 = _mm512_broadcast_f32x4(*(v4sf *)&spjbuf[j+1][2]);
+				jbuf2 = _mm512_broadcast_f32x4(*(v4sf *)&spjbuf[((j+1)<nj ? j+1 : j)][2]);
 
                 v16sf dx = _mm512_sub_ps(xi, xj);
                 v16sf dy = _mm512_sub_ps(yi, yj);
@@ -1055,7 +1055,7 @@ private:
 				v8sf yj  = _mm256_shuffle_ps(jbuf0, jbuf0, 0x55);
 				v8sf zj  = _mm256_shuffle_ps(jbuf0, jbuf0, 0xaa);
 #ifdef AVX_PRELOAD
-				jbuf0 = _mm256_broadcast_ps((v4sf *)&spjbuf[j+1][0]);
+				jbuf0 = _mm256_broadcast_ps((v4sf *)&spjbuf[((j+1)<nj ? j+1 : j)][0]);
 #endif
 
 #ifndef AVX_PRELOAD
@@ -1066,7 +1066,7 @@ private:
 				v8sf qzz = _mm256_shuffle_ps(jbuf1, jbuf1, 0xaa);
 				v8sf mj  = _mm256_shuffle_ps(jbuf1, jbuf1, 0xff);
 #ifdef AVX_PRELOAD
-				jbuf1 = _mm256_broadcast_ps((v4sf *)&spjbuf[j+1][1]);
+				jbuf1 = _mm256_broadcast_ps((v4sf *)&spjbuf[((j+1)<nj ? j+1 : j)][1]);
 #endif
 
 #ifndef AVX_PRELOAD
@@ -1077,7 +1077,7 @@ private:
 				v8sf qzx = _mm256_shuffle_ps(jbuf2, jbuf2, 0xaa);
 				v8sf mtr = _mm256_shuffle_ps(jbuf2, jbuf2, 0xff);
 #ifdef AVX_PRELOAD
-				jbuf2 = _mm256_broadcast_ps((v4sf *)&spjbuf[j+1][2]);
+				jbuf2 = _mm256_broadcast_ps((v4sf *)&spjbuf[((j+1)<nj ? j+1 : j)][2]);
 #endif
 
                 v8sf dx = _mm256_sub_ps(xi, xj);
@@ -1162,19 +1162,19 @@ private:
 		v4df xj  = _mm256_permute4x64_pd(jbuf0, 0x00);
 		v4df yj  = _mm256_permute4x64_pd(jbuf0, 0x55);
 		v4df zj  = _mm256_permute4x64_pd(jbuf0, 0xaa);
-		jbuf0 = *((v4df*)spjbufd[j+1][0]);
+		jbuf0 = *((v4df*)spjbufd[((j+1)<nj ? j+1 : j)][0]);
 
 		v4df qxx = _mm256_permute4x64_pd(jbuf1, 0x00);
 		v4df qyy = _mm256_permute4x64_pd(jbuf1, 0x55);
 		v4df qzz = _mm256_permute4x64_pd(jbuf1, 0xaa);
 		v4df mj  = _mm256_permute4x64_pd(jbuf1, 0xff);
-		jbuf1 = *((v4df*)spjbufd[j+1][1]);
+		jbuf1 = *((v4df*)spjbufd[((j+1)<nj ? j+1 : j)][1]);
 		
 		v4df qxy = _mm256_permute4x64_pd(jbuf2, 0x00);
 		v4df qyz = _mm256_permute4x64_pd(jbuf2, 0x55);
 		v4df qzx = _mm256_permute4x64_pd(jbuf2, 0xaa);
 		v4df mtr = _mm256_permute4x64_pd(jbuf2, 0xff);
-		jbuf2 = *((v4df*)spjbufd[j+1][2]);
+		jbuf2 = *((v4df*)spjbufd[((j+1)<nj ? j+1 : j)][2]);
 		
 		v4df dx = xj - xi;
 		v4df dy = yj - yi;
@@ -1254,7 +1254,7 @@ private:
 
 #endif
 
-class PhantomGrapeQuad64Bit{
+class alignas(64) PhantomGrapeQuad64Bit{
 public:
     enum{
 	NIMAX = 32768,
@@ -1465,7 +1465,7 @@ private:
 #endif
             for(int j=0; j<nj; j++){
 #ifdef AVX_PRELOAD
-                jbuf = *((v4df*)(epjbuf+j+1));
+                jbuf = *((v4df*)(epjbuf + ((j+1)<nj ? j+1 : j)));
                 v8df dx = _mm512_sub_pd(xi, xj); 
                 v8df dy = _mm512_sub_pd(yi, yj); 
                 v8df dz = _mm512_sub_pd(zi, zj); 
@@ -1576,7 +1576,7 @@ private:
             v4df mj =  _mm256_permute4x64_pd(jbuf, 0xff);
 
             for(int j=0; j<nj; j++){
-                jbuf = *((v4df*)(epjbuf+j+1));
+                jbuf = *((v4df*)(epjbuf + ((j+1)<nj ? j+1 : j)));
                 v4df dx = _mm256_sub_pd(xi, xj); 
                 v4df dy = _mm256_sub_pd(yi, yj); 
                 v4df dz = _mm256_sub_pd(zi, zj);
@@ -1680,8 +1680,8 @@ private:
 #endif
             for(int j=0; j<nj; j++){
 #ifdef AVX_PRELOAD
-                jbuf = *((v4df*)(epjbuf+j+1));
-                rsjbuf = _mm512_set1_pd(*(rsearchj+j+1));
+                jbuf = *((v4df*)(epjbuf + ((j+1)<nj ? j+1 : j)));
+                rsjbuf = _mm512_set1_pd(rsearchj[((j+1)<nj ? j+1 : j)]);
                 v8df dx = _mm512_sub_pd(xi, xj); 
                 v8df dy = _mm512_sub_pd(yi, yj); 
                 v8df dz = _mm512_sub_pd(zi, zj);
@@ -1749,8 +1749,8 @@ private:
 #endif
             for(int j=0; j<nj; j++){
 #ifdef AVX_PRELOAD
-                jbuf = *((v4df*)(epjbuf+j+1));
-                rsjbuf = _mm512_set1_pd(*(rsearchj+j+1));
+                jbuf = *((v4df*)(epjbuf + ((j+1)<nj ? j+1 : j)));
+                rsjbuf = _mm512_set1_pd(rsearchj[((j+1)<nj ? j+1 : j)]);
                 v8df dx = _mm512_sub_pd(xi, xj); 
                 v8df dy = _mm512_sub_pd(yi, yj); 
                 v8df dz = _mm512_sub_pd(zi, zj);
@@ -1866,8 +1866,8 @@ private:
             v4df zj =  _mm256_permute4x64_pd(jbuf, 0xaa);
             v4df rsj= rsjbuf;
             for(int j=0; j<nj; j++){
-                jbuf = *((v4df*)(epjbuf+j+1));
-                rsjbuf  =  _mm256_broadcast_sd(rsearchj+j+1);
+                jbuf = *((v4df*)(epjbuf + ((j+1)<nj ? j+1 : j)));
+                rsjbuf = _mm256_broadcast_sd(rsearchj + ((j+1)<nj ? j+1 : j));
                 v4df dx = _mm256_sub_pd(xi, xj); 
                 v4df dy = _mm256_sub_pd(yi, yj); 
                 v4df dz = _mm256_sub_pd(zi, zj);
@@ -1914,8 +1914,8 @@ private:
             v4df mj =  _mm256_permute4x64_pd(jbuf, 0xff);
             v4df rsj= rsjbuf;
             for(int j=0; j<nj; j++){
-                jbuf = *((v4df*)(epjbuf+j+1));
-                rsjbuf  =  _mm256_broadcast_sd(rsearchj+j+1);
+                jbuf = *((v4df*)(epjbuf + ((j+1)<nj ? j+1 : j)));
+                rsjbuf = _mm256_broadcast_sd(rsearchj + ((j+1)<nj ? j+1 : j));
                 v4df dx = _mm256_sub_pd(xi, xj); 
                 v4df dy = _mm256_sub_pd(yi, yj); 
                 v4df dz = _mm256_sub_pd(zi, zj);
@@ -2027,14 +2027,14 @@ private:
                 v8df xj  = _mm512_permutex_pd(jp, 0x00);
                 v8df yj  = _mm512_permutex_pd(jp, 0x55);
                 v8df zj  = _mm512_permutex_pd(jp, 0xaa);
-                jbuf0 = *((v4df*)spjbuf[j+1][0]);
+                jbuf0 = *((v4df*)spjbuf[((j+1)<nj ? j+1 : j)][0]);
 
                 v8df jq  = _mm512_broadcast_f64x4(jbuf1);
                 v8df qxx = _mm512_permutex_pd(jq, 0x00);
                 v8df qyy = _mm512_permutex_pd(jq, 0x55);
                 v8df qzz = _mm512_permutex_pd(jq, 0xaa);
                 v8df mj  = _mm512_permutex_pd(jq, 0xff);
-                jbuf1 = *((v4df*)spjbuf[j+1][1]);
+                jbuf1 = *((v4df*)spjbuf[((j+1)<nj ? j+1 : j)][1]);
 		
 
                 v8df jq2 = _mm512_broadcast_f64x4(jbuf2);
@@ -2042,7 +2042,7 @@ private:
                 v8df qyz = _mm512_permutex_pd(jq2, 0x55);
                 v8df qzx = _mm512_permutex_pd(jq2, 0xaa);
                 v8df mtr = _mm512_permutex_pd(jq2, 0xff);
-                jbuf2 = *((v4df*)spjbuf[j+1][2]);
+                jbuf2 = *((v4df*)spjbuf[((j+1)<nj ? j+1 : j)][2]);
 		
                 v8df dx = _mm512_sub_pd(xi, xj); 
                 v8df dy = _mm512_sub_pd(yi, yj); 
@@ -2201,19 +2201,19 @@ private:
                 v4df xj  = _mm256_permute4x64_pd(jbuf0, 0x00);
                 v4df yj  = _mm256_permute4x64_pd(jbuf0, 0x55);
                 v4df zj  = _mm256_permute4x64_pd(jbuf0, 0xaa);
-                jbuf0 = *((v4df*)spjbuf[j+1][0]);
+                jbuf0 = *((v4df*)spjbuf[((j+1)<nj ? j+1 : j)][0]);
 
                 v4df qxx = _mm256_permute4x64_pd(jbuf1, 0x00);
                 v4df qyy = _mm256_permute4x64_pd(jbuf1, 0x55);
                 v4df qzz = _mm256_permute4x64_pd(jbuf1, 0xaa);
                 v4df mj  = _mm256_permute4x64_pd(jbuf1, 0xff);
-                jbuf1 = *((v4df*)spjbuf[j+1][1]);
+                jbuf1 = *((v4df*)spjbuf[((j+1)<nj ? j+1 : j)][1]);
 		
                 v4df qxy = _mm256_permute4x64_pd(jbuf2, 0x00);
                 v4df qyz = _mm256_permute4x64_pd(jbuf2, 0x55);
                 v4df qzx = _mm256_permute4x64_pd(jbuf2, 0xaa);
                 v4df mtr = _mm256_permute4x64_pd(jbuf2, 0xff);
-                jbuf2 = *((v4df*)spjbuf[j+1][2]);
+                jbuf2 = *((v4df*)spjbuf[((j+1)<nj ? j+1 : j)][2]);
 		
                 v4df dx = _mm256_sub_pd(xi, xj); 
                 v4df dy = _mm256_sub_pd(yi, yj); 

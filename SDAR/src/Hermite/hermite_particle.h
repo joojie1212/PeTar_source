@@ -105,8 +105,8 @@ namespace H4{
             Tparticle::print(_fout);
             _fout<<" dt="<<dt
                  <<" time="<<time
-                 <<" acc0="<<acc0
-                 <<" acc1="<<acc0;
+                 <<" acc0="<<acc0[0]<<","<<acc0[1]<<","<<acc0[2]
+                 <<" acc1="<<acc1[0]<<","<<acc1[1]<<","<<acc1[2];
 #ifdef HERMITE_DEBUG_ACC
             _fout<<" acc2="<<acc2
                  <<" acc3="<<acc3;

@@ -164,7 +164,13 @@ namespace H4{
             if(_time==0.0) return dt_max_;
             else {
                 // the binary tree for current time position in block step 
-                unsigned long long int bitmap = to_double(_time/dt_min_);
+                const double ticks = to_double(_time/dt_min_);
+                if (!(ticks >= 0.0) || !std::isfinite(ticks) || ticks >= std::ldexp(1.0, 64)) {
+                    std::cerr << "Invalid block-step time" << std::endl;
+                    abort();
+                }
+                unsigned long long int bitmap = ticks;
+                if (bitmap == 0) return dt_min_;
                 //#ifdef __GNUC__ 
                 //        PS::S64 dts = __builtin_ctz(bitmap) ;
                 //        PS::U64 c = (1<<dts);

@@ -87,7 +87,7 @@ public:
     }
     void print(std::ostream & _fout) const{
         Ptcl::print(_fout);
-        std::cerr<<" id_cluster="<<id_cluster
+        _fout<<" id_cluster="<<id_cluster
                  <<" adr_org="<<adr_org;
     }
 

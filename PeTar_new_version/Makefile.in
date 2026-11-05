@@ -254,7 +254,7 @@ DEBUG_OPT_FLAGS = @DEBFLAGS@ -D SANITY_CHECK_REALLOCATABLE_ARRAY
 HARD_DEBFLAGS+= -D AR_DEBUG -D AR_DEBUG_DUMP -D AR_DEBUG_PRINT -D AR_WARN -D HARD_DEBUG -D HARD_DEBUG_PRINT -D ADJUST_GROUP_DEBUG -D HERMITE_DEBUG -D AR_COLLECT_DS_MODIFY_INFO -D STABLE_CHECK_DEBUG_PRINT -D ARTIFICIAL_PARTICLE_DEBUG -D ARTIFICIAL_PARTICLE_DEBUG_PRINT
 HARD_MT_FLAGS += -D AR_TTL -D AR_SLOWDOWN_TREE -D AR_SLOWDOWN_TIMESCALE -D HARD_CHECK_ENERGY 
 
-HARD_SRC= io.hpp ptcl.hpp particle_base.hpp hard_assert.hpp cluster_list.hpp hard.hpp hard_ptcl.hpp hermite_interaction.hpp hermite_information.hpp hermite_perturber.hpp ar_interaction.hpp ar_perturber.hpp search_group_candidate.hpp artificial_particles.hpp stability.hpp soft_ptcl.hpp static_variables.hpp tidal_tensor.hpp orbit_sampling.hpp pseudoparticle_multipole.hpp
+HARD_SRC= io.hpp ptcl.hpp particle_base.hpp hard_assert.hpp cluster_list.hpp hard.hpp hard_ptcl.hpp hermite_interaction.hpp hermite_information.hpp hermite_perturber.hpp ar_interaction.hpp ar_perturber.hpp search_group_candidate.hpp artificial_particles.hpp stability.hpp soft_ptcl.hpp static_variables.hpp tidal_tensor.hpp orbit_sampling.hpp pseudoparticle_multipole.hpp peters_merger_time.hpp
 
 build/petar.format.transfer: format_transfer.cxx |build
 	$(CXX) $(PETAR_INCLUDE) $(OPTFLAGS) $(CXXFLAGS) $(MT_FLAGS) -o $@ $< $(CXXLIBS)
@@ -283,6 +283,9 @@ build/petar.tt.test: tidal_tensor_test.cxx |build
 
 build/petar.tide.test: tide_test.cxx two_body_tide.hpp |build
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $< -o $@  $(CXXLIBS)
+
+build/petar.peters_merger_time.test: test/peters_merger_time.cxx peters_merger_time.hpp |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $< -o $@ $(CXXLIBS)
 
 build/petar.io.test: io_test.cxx |build
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS)  $< -o $@  $(CXXLIBS)

@@ -10,6 +10,7 @@
 #include "Hermite/hermite_particle.h"
 #include "ar_perturber.hpp"
 #include "two_body_tide.hpp"
+#include "peters_merger_time.hpp"
 #ifdef BHMERGER
 #include "bhmerger_output.hpp"
 #endif
@@ -90,11 +91,9 @@ public:
             return;
         }
         const Float c = bse_manager.getSpeedOfLight();
-        const Float e2 = bin.ecc*bin.ecc;
         const Float lifetime = (5.0/256.0)*std::pow(c,5)*std::pow(bin.semi,4)
             /(std::pow(gravitational_constant,3)*p1.mass*p2.mass*(p1.mass+p2.mass))
-            *std::pow(1.0-e2,3.5)
-            /(1.0+(73.0/24.0)*e2+(37.0/96.0)*e2*e2);
+            *PetersMergerTime::eccentricityFactor(bin.ecc);
         const Float deadline = std::isfinite(lifetime)
             ? now + ((lifetime<bin.period) ? 0.0 : lifetime) : -1.0;
         p1.time_merger = p2.time_merger = deadline;
@@ -306,7 +305,7 @@ public:
         auto& ch1 = _p1.changeover;
         auto& ch2 = _p2.changeover;
 
-        Float r = r2*invr;
+        Float r = r2*inv_r;
         Float k = ChangeOver::calcAcc0WTwo(ch1,ch2,r);
         Float kpot = ChangeOver::calcPotWTwo(ch1,ch2,r);
 
@@ -938,7 +937,7 @@ public:
                                AR::BinaryTree<PtclHard>& _bin) {
         int modify_return = 0;
 #ifdef STELLAR_EVOLUTION
-        int modify_branch[2];
+        int modify_branch[2] = {0, 0};
         if (_bin.getMemberN()>2) {
             for (int k=0; k<2; k++) {
                 if (_bin.isMemberTree(k)) {
@@ -964,11 +963,11 @@ public:
             if (modify_branch[0]>0&&modify_branch[1]>0) {
                 _bin_interrupt.adr = &_bin;
             }
-            if (_bin_interrupt.status == AR::InterruptStatus::destroy) {
-                // if both branch has destroyed, set destroy status, otherwise set merge status
-                if (!(modify_branch[0]==3&&modify_branch[1]==3))
-                    _bin_interrupt.status = AR::InterruptStatus::merge;
-            }
+            // A destroyed descendant does not mean that this entire subtree died.
+            const bool all_destroyed = modify_branch[0]==3 && modify_branch[1]==3;
+            if (modify_return == 3 && !all_destroyed) modify_return = 2;
+            if (_bin_interrupt.status == AR::InterruptStatus::destroy && !all_destroyed)
+                _bin_interrupt.status = AR::InterruptStatus::merge;
         }
         else {
             auto* p1 = _bin.getLeftMember();
@@ -1133,11 +1132,23 @@ public:
                             // then derive every cached orbital quantity from the newly
                             // reconstructed particle state. This prevents new semi/ecc
                             // from being mixed with stale period, r, t_peri or am.
-                            const Float phase_ecca = _bin.ecca;
+                            Float phase_ecca = _bin.ecca;
+                            const bool conic_changed = (_bin.semi > 0.0) != (semi > 0.0);
+                            const Float separation = std::sqrt(pos_red * pos_red);
                             _bin.semi = semi;
                             _bin.ecc = ecc;
                             _bin.m1 = p1->mass;
                             _bin.m2 = p2->mass;
+                            if (conic_changed) {
+                                const Float peri = semi*(1.0-ecc);
+                                const Float apo = semi*(1.0+ecc);
+                                if (separation < peri || (semi > 0.0 && separation > apo)) {
+                                    std::cerr << "Post-BSE orbit cannot preserve current separation" << std::endl;
+                                    abort();
+                                }
+                                phase_ecca = ecc == 0.0 ? 0.0 : _bin.calcEccAnomaly(separation);
+                                if (drdv < 0.0) phase_ecca = -phase_ecca;
+                            }
                             _bin.ecca = phase_ecca;
                             _bin.calcParticles(gravitational_constant);
                             for (int k=0; k<3; k++) {
@@ -1608,12 +1619,18 @@ public:
                         spin2_zj[0] = p2->spin.x;
                         spin2_zj[1] = p2->spin.y;
                         spin2_zj[2] = p2->spin.z;
+#pragma omp critical
+                        {
                         bse_manager.merge(p1->star, p2->star, out[0], out[1], semi, ecc,
                                           dr_zj, dv_zj, spin1_zj, spin2_zj,
                                           gravitational_constant);
+                        }
                         // ===================== BHMERGER-ZJ: pass orbital vectors to BSE end =====================
 #else
+#pragma omp critical
+                        {
                         bse_manager.merge(p1->star, p2->star, out[0], out[1], semi, ecc);
+                        }
 #endif
                         //std::cerr << "BEGIN postprocess"<<std::endl;//zhujie debug
                         //std::cout<<"postProcess2"<<std::endl;
@@ -1657,6 +1674,7 @@ public:
                             //std::cout << "enter if"<<std::endl;
 #pragma omp critical(merge_logging)
                             {
+#ifdef AR_DEBUG_PRINT
                                 // Diagnostic: record why Dynamic_merge logging may be skipped
                                 std::cerr<<"DEBUG Dynamic_merge invoked: write_flag="<<stellar_evolution_write_flag
                                          <<" m1="<<p1->mass<<" m2="<<p2->mass<<std::endl;
@@ -1665,6 +1683,7 @@ public:
                                             <<" m1="<<p1->mass<<" m2="<<p2->mass<<std::endl;
                                 }
 
+#endif
                                 if (stellar_evolution_write_flag && (p1->mass==0.0||p2->mass==0.0)) {
                                     fout_bse<<"Dynamic_merge: "
                                             <<std::setw(WRITE_WIDTH)<<p1->id

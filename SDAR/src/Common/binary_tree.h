@@ -586,7 +586,12 @@ namespace COMM{
                         }
                         else {
 
-                            Float incline=acos(std::min(Float(1.0), _bin.am*bin_in->am/sqrt((_bin.am*_bin.am)*(bin_in->am*bin_in->am))));
+                            const Float ratio = _bin.am*bin_in->am/sqrt((_bin.am*_bin.am)*(bin_in->am*bin_in->am));
+                            if (!std::isfinite(to_double(ratio))) {
+                                bin_in->stab = _bin.stab = NUMERIC_FLOAT_MAX;
+                                return _bin.stab;
+                            }
+                            Float incline=acos(std::max(Float(-1.0), std::min(Float(1.0), ratio)));
                             
                             Float cosinc = cos(incline);
                             Float fac = 1.0 - 2.0*bin_in->ecc/3.0 * (1.0 - 0.5*bin_in->ecc*bin_in->ecc) 
@@ -700,7 +705,7 @@ namespace COMM{
                 else {
                     p[0] = bin_host[k];
                     int ki = k;
-                    while(bin_host[ki]==p[0]&&ki>=0) bin_host[ki--] = &_bins[i];
+                    while(ki>=0&&bin_host[ki]==p[0]) bin_host[ki--] = &_bins[i];
                 }
 
                 // if no tree root assign, set member 2 to particle and their host to current bins i
@@ -717,7 +722,7 @@ namespace COMM{
                 else {
                     p[1] = bin_host[k+1];
                     int ki = k+1;
-                    while(bin_host[ki]==p[1]&&ki<_n) bin_host[ki++] = &_bins[i];
+                    while(ki<_n&&bin_host[ki]==p[1]) bin_host[ki++] = &_bins[i];
                 }
 
                 // calculate binary parameter
@@ -912,7 +917,7 @@ namespace COMM{
             _bin_out[_i] = *this;
             for (int k=0; k<2; k++) {
                 if (member_index[k]<0) {
-                    inow--;
+                    inow = _i - n_iter;
                     ASSERT(inow>=0);
                     _bin_out[_i].member[k] = &_bin_out[inow];
                     n_iter += ((BinaryTreeLocal*)member[k])->copyDataIter(_bin_out, inow);

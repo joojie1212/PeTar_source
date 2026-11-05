@@ -24,6 +24,8 @@
 #include<string>
 #include<sstream>
 #include<cstdlib>
+#include<cerrno>
+#include<limits>
 #include<cmath>
 #include<cstdio>
 //#include<unistd.h>
@@ -473,7 +475,17 @@ public:
                     opt_used += 2;
                     break;
                 case 23:
-                    id_offset.value = atoi(optarg);
+                    {
+                        char* end = nullptr;
+                        errno = 0;
+                        const long long value = std::strtoll(optarg, &end, 10);
+                        if (errno == ERANGE || end == optarg || *end != '\0'
+                            || value < -1 || value > std::numeric_limits<PS::S64>::max()) {
+                            std::cerr << "Invalid 64-bit --id-offset: " << optarg << std::endl;
+                            abort();
+                        }
+                        id_offset.value = value;
+                    }
                     if(print_flag) id_offset.print(std::cout);
                     opt_used += 2;
                     break;
@@ -2742,7 +2754,11 @@ public:
             // if mass is not zero, correct energy
             if (pi.mass>0) {
                 PS::F64 dpot = pi.mass*pi.pot_tot;
-                PS::F64 dkin = 0.5*pi.mass*(pi.vel*pi.vel);
+                PS::F64vec energy_vel = pi.vel;
+#ifdef RECORD_CM_IN_HEADER
+                energy_vel += stat.pcm.vel;
+#endif
+                PS::F64 dkin = 0.5*pi.mass*(energy_vel*energy_vel);
                 PS::F64 eloss = dpot + dkin;
                 stat.energy.etot_ref -= eloss;
                 stat.energy.de_change_cum -= eloss;
@@ -2758,7 +2774,8 @@ public:
         PS::ReallocatableArray<PS::S32> remove_list_thx[num_thread];
         for (PS::S32 i=0; i<num_thread; i++) remove_list_thx[i].resizeNoInitialize(0);
 
-#pragma omp parallel
+        PS::F64 escaper_energy_loss = 0.0;
+#pragma omp parallel reduction(+:escaper_energy_loss)
         { 
             const PS::S32 ith = PS::Comm::getThreadNum();
 #pragma omp for 
@@ -2767,18 +2784,24 @@ public:
                 if (escaper.isEscaper(pi,stat.pcm)) {
                     remove_list_thx[ith].push_back(i);
                     PS::F64 dpot = pi.mass*pi.pot_tot;
-                    PS::F64 dkin = 0.5*pi.mass*(pi.vel*pi.vel);
+                    PS::F64vec energy_vel = pi.vel;
+#ifdef RECORD_CM_IN_HEADER
+                    energy_vel += stat.pcm.vel;
+#endif
+                    PS::F64 dkin = 0.5*pi.mass*(energy_vel*energy_vel);
                     PS::F64 eloss = dpot + dkin;
-                    stat.energy.etot_ref -= eloss;
-                    stat.energy.de_change_cum -= eloss;
-                    stat.energy.etot_sd_ref -= eloss;
-                    stat.energy.de_sd_change_cum -= eloss;
+                    escaper_energy_loss += eloss;
                 }
                 // Registered removed particles have already done energy correction
                 else if (pi.mass==0.0&&pi.group_data.artificial.isUnused()) 
                     remove_list_thx[ith].push_back(i);
             }
         }
+
+        stat.energy.etot_ref -= escaper_energy_loss;
+        stat.energy.de_change_cum -= escaper_energy_loss;
+        stat.energy.etot_sd_ref -= escaper_energy_loss;
+        stat.energy.de_sd_change_cum -= escaper_energy_loss;
 
         // gether remove indices
         int n_esc=0;
