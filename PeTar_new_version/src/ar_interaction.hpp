@@ -35,6 +35,7 @@ public:
     std::ofstream fout_sse; ///> log file for SSE event
     std::ofstream fout_bse; ///> log file for BSE event
 #ifdef BHMERGER
+    BHMergerOutput change_output; ///> significant prediction-orbit changes
     BHMergerOutput bhmerger_output; ///> black-hole merger event output
 #endif
 #ifdef FROZEN_BINARY
@@ -79,14 +80,26 @@ public:
         p1.time_merger = p2.time_merger = -1.0;
         p1.merger_semi = p2.merger_semi = -1.0;
         p1.merger_ecc = p2.merger_ecc = -1.0;
+        p1.merger_record_time = p2.merger_record_time = -1.0;
     }
 
     template<class Tbinary>
     void refreshBHMergerPrediction(Tbinary& bin, PtclHard& p1, PtclHard& p2,
-                                   const Float now) const {
+                                   const Float now, const bool record_change = false) const {
+        const bool log_change = record_change
+            && p1.getBinaryPairID()==p2.id && p2.getBinaryPairID()==p1.id
+            && p1.time_merger>=0.0 && p2.time_merger>=0.0
+            && p1.merger_record_time>=0.0 && p2.merger_record_time>=0.0;
+        const Float old_a = p1.merger_semi;
+        const Float old_e = p1.merger_ecc;
+        const Float old_time = p1.merger_record_time;
+        const Float old_deadline = std::max(p1.time_merger, p2.time_merger);
         bin.calcOrbit(gravitational_constant);
         if (!(bin.semi>0.0 && bin.ecc>=0.0 && bin.ecc<1.0)
             || !std::isfinite(bin.semi) || !std::isfinite(bin.ecc)) {
+            if (log_change)
+                change_output.writeChange(old_time, now, p1, p2,
+                    old_a, old_e, bin.semi, bin.ecc, old_deadline, -1.0);
             clearBHMergerPrediction(p1, p2);
             return;
         }
@@ -99,6 +112,10 @@ public:
         p1.time_merger = p2.time_merger = deadline;
         p1.merger_semi = p2.merger_semi = bin.semi;
         p1.merger_ecc = p2.merger_ecc = bin.ecc;
+        p1.merger_record_time = p2.merger_record_time = now;
+        if (log_change)
+            change_output.writeChange(old_time, now, p1, p2,
+                old_a, old_e, bin.semi, bin.ecc, old_deadline, deadline);
         p1.setBinaryPairID(p2.id);
         p2.setBinaryPairID(p1.id);
     }
@@ -1445,7 +1462,7 @@ public:
                                 || clearly_perturbed)
                                 refreshBHMergerPrediction(
                                     _bin, *p1, *p2,
-                                    _bin_interrupt.time_now);
+                                    _bin_interrupt.time_now, clearly_perturbed);
                             const Float next_bh_check =
                                 std::max(_bin_interrupt.time_now,
                                          std::max(p1->time_merger,
@@ -1881,7 +1898,7 @@ public:
                         // the physical possibility that a perturbation delays merger.
                         if (members_changed || prediction_missing || clearly_perturbed)
                             refreshBHMergerPrediction(_bin, *p1, *p2,
-                                                      _bin_interrupt.time_now);
+                                                      _bin_interrupt.time_now, clearly_perturbed);
                         BHmerger_flag = p1->time_merger>=0.0
                                      && p2->time_merger>=0.0
                                      && std::max(p1->time_merger,p2->time_merger)

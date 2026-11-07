@@ -3242,6 +3242,10 @@ public:
                 my_rank == 0,
                 WRITE_WIDTH,
                 WRITE_PRECISION);
+            hard_manager.ar_manager.interaction.change_output.openChange(
+                fname_snp + ".change",
+                input_parameters.append_switcher.value == 1,
+                my_rank == 0, 17);
             // Rank 0 must finish creating the shared file and its header before
             // another rank can append a merger event.
             PS::Comm::barrier();
@@ -4670,6 +4674,7 @@ public:
         if (interaction.fout_bse.is_open()) interaction.fout_bse.close();
 #ifdef BHMERGER
         interaction.bhmerger_output.close();
+        interaction.change_output.close();
 #endif
 #endif
 #ifdef ADJUST_GROUP_PRINT

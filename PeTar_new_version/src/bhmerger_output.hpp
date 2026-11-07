@@ -147,6 +147,42 @@ public:
         }
     }
 
+    // Change rows use explicit separators: round-trip precision can exceed
+    // WRITE_WIDTH, in which case fixed-width columns alone would run together.
+    void openChange(const std::string& filename, bool append,
+                    bool initialize_file, int precision) {
+        filename_ = filename;
+        precision_ = precision;
+        enabled_ = true;
+        if (!append && initialize_file)
+            enabled_ = writeLocked(filename_,
+                "time_old time_new id1 id2 m1 m2 a_old e_old a_new e_new "
+                "tmerge_old tmerge_new rx ry rz vx vy vz\n", true);
+    }
+
+    template<class Tparticle>
+    void writeChange(double time_old, double time_new,
+                     const Tparticle& p1, const Tparticle& p2,
+                     double a_old, double e_old, double a_new, double e_new,
+                     double tmerge_old, double tmerge_new) const {
+        if (!enabled_) return;
+#pragma omp critical(bhmerger_output)
+        {
+            std::ostringstream line;
+            line << std::setprecision(precision_)
+                 << time_old << ' ' << time_new
+                 << ' ' << p1.id << ' ' << p2.id
+                 << ' ' << p1.mass << ' ' << p2.mass
+                 << ' ' << a_old << ' ' << e_old
+                 << ' ' << a_new << ' ' << e_new
+                 << ' ' << tmerge_old << ' ' << tmerge_new;
+            for (int k=0; k<3; ++k) line << ' ' << p1.pos[k]-p2.pos[k];
+            for (int k=0; k<3; ++k) line << ' ' << p1.vel[k]-p2.vel[k];
+            line << '\n';
+            writeLocked(filename_, line.str(), false);
+        }
+    }
+
     bool isOpen() const {
         return enabled_;
     }

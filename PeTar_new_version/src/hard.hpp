@@ -2485,7 +2485,11 @@ public:
                 n_neighbor_zero    += hard_int_thread[ith]->n_neighbor_zero;
 #endif
 #ifdef HARD_CHECK_ENERGY
-                energy += hard_int_thread[ith]->energy;
+                // Multiple cluster workers share this accumulator.
+#pragma omp critical(petar_hard_energy_accumulate)
+                {
+                    energy += hard_int_thread[ith]->energy;
+                }
 #endif
                 
                 hard_int_thread[ith]->clear();
@@ -2559,7 +2563,11 @@ public:
                 H4_step_sum        += hard_int_ptr->H4_step_sum;
 #endif
 #ifdef HARD_CHECK_ENERGY
-                energy += hard_int_ptr->energy;
+                // Multiple cluster workers share this accumulator.
+#pragma omp critical(petar_hard_energy_accumulate)
+                {
+                    energy += hard_int_ptr->energy;
+                }
 #endif
                 
                 hard_int_ptr->clear();

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <functional>
+#include <sstream>
+#include <iomanip>
 #include "Common/list.h"
 #include "Common/particle_group.h"
 #include "AR/symplectic_step.h"
@@ -203,6 +205,12 @@ namespace AR {
         Float gt_kick_inv_;   ///< inverse time transformation factor for kick: dt(kick) = ds/gt_kick_inv_
 #endif
 
+#if defined(AR_TTL) && defined(AR_SLOWDOWN_TREE)
+        // Local recovery latch, reset for each integration interval. Not a
+        // physical state variable and deliberately absent from binary dumps.
+        bool slowdown_recovery_active_ = false;
+#endif
+
         // force array
         COMM::List<Force> force_; ///< acceleration array 
 
@@ -261,6 +269,9 @@ namespace AR {
         /*! Free dynamical memory space allocated
          */
         void clear() {
+#if defined(AR_TTL) && defined(AR_SLOWDOWN_TREE)
+            slowdown_recovery_active_ = false;
+#endif
             time_ = 0.0;
             etot_ref_ =0.0;
             ekin_ = 0.0;
@@ -319,6 +330,9 @@ namespace AR {
 #ifdef AR_TTL
             gt_drift_inv_ = _sym.gt_drift_inv_;
             gt_kick_inv_ = _sym.gt_kick_inv_;
+#ifdef AR_SLOWDOWN_TREE
+            slowdown_recovery_active_ = _sym.slowdown_recovery_active_;
+#endif
 #endif
             force_  = _sym.force_;
             manager = _sym.manager;
@@ -1404,7 +1418,21 @@ namespace AR {
             }
 
 
+#ifdef AR_TTL
+            if (slowdown_recovery_active_) {
+                for (int i=0; i<n_bin; ++i)
+                    info.binarytree[i].slowdown.setSlowDownFactor(1.0);
+            }
+#endif
             if (_update_energy_flag) {
+#ifdef AR_TTL
+                const Float drift_before = gt_drift_inv_;
+                const Float kick_before = gt_kick_inv_;
+                const Float sd_proposed = sd_root.getSlowDownFactor();
+                const Float error_before = getEnergyErrorSlowDown();
+                bool recovered = false;
+                Float rejected_drift = 0.0, rejected_kick = 0.0;
+#endif
                 Float ekin_sd_bk = ekin_sd_;
                 Float epot_sd_bk = epot_sd_;
                 Float H_sd_bk = getHSlowDown();
@@ -1428,6 +1456,33 @@ namespace AR {
                     ekin_sd_ = ekin_*kappa_inv;
                     epot_sd_ = epot_*kappa_inv;
                 }
+#ifdef AR_TTL
+                // A large slowdown change can leave the additive TTL correction
+                // non-positive. Retry this representation with no slowdown,
+                // preserving drift-kick and the existing energy residual.
+                // Never hide an error by resetting the energy reference to E.
+                if (!(gt_drift_inv_>0.0) || ISINF(gt_drift_inv_)
+                    || !(gt_kick_inv_>0.0) || ISINF(gt_kick_inv_)) {
+                    rejected_drift = gt_drift_inv_;
+                    rejected_kick = gt_kick_inv_;
+                    slowdown_recovery_active_ = true;
+                    for (int i=0; i<n_bin; ++i)
+                        info.binarytree[i].slowdown.setSlowDownFactor(1.0);
+                    gt_kick_inv_ = calcAccPotAndGTKickInv();
+                    gt_drift_inv_ = drift_before + (gt_kick_inv_ - kick_before);
+                    calcEKin();
+                    recovered = true;
+                    if (!(gt_drift_inv_>0.0) || ISINF(gt_drift_inv_)
+                        || !(gt_kick_inv_>0.0) || ISINF(gt_kick_inv_)) {
+                        std::cerr << "AR_SLOWDOWN_RECOVERY_FAILED time=" << time_+info.time_offset
+                                  << " drift=" << gt_drift_inv_ << " kick=" << gt_kick_inv_ << std::endl;
+#ifdef AR_DEBUG_DUMP
+                        DATADUMP("dump_slowdown_invalid_gt");
+#endif
+                        abort();
+                    }
+                }
+#endif
                 Float de_sd = (ekin_sd_ - ekin_sd_bk) + (epot_sd_ - epot_sd_bk);
                 etot_sd_ref_ += de_sd;
 
@@ -1436,6 +1491,24 @@ namespace AR {
                 // add slowdown change to the global slowdown energy
                 de_sd_change_cum_ += de_sd;
                 dH_sd_change_cum_ += dH_sd;
+#ifdef AR_TTL
+                if (recovered) {
+                    std::ostringstream message;
+                    message << std::setprecision(17)
+                        << "AR_SLOWDOWN_RECOVERY action=disable_for_interval time=" << time_+info.time_offset
+                        << " n=" << particles.getSize() << " sd_old=" << sd_backup << " sd_proposed=" << sd_proposed
+                        << " drift_old=" << drift_before << " kick_old=" << kick_before
+                        << " drift_rejected=" << rejected_drift << " kick_rejected=" << rejected_kick
+                        << " drift_restored=" << gt_drift_inv_ << " kick_restored=" << gt_kick_inv_
+                        << " dE_sd=" << de_sd << " dH_sd=" << dH_sd
+                        << " E_sd_error_before=" << error_before
+                        << " E_sd_error=" << getEnergyErrorSlowDown() << " ids=";
+                    for (int i=0; i<particles.getSize(); ++i) message << particles[i].id << ',';
+                    message << '\n';
+#pragma omp critical(ar_slowdown_diagnostic)
+                    { std::cerr << message.str(); }
+                }
+#endif
             }
         }
 #elif  AR_SLOWDOWN_ARRAY
@@ -1544,6 +1617,9 @@ namespace AR {
           @param[in] _time: real physical time to initialize
         */
         void initialIntegration(const Float _time) {
+#if defined(AR_TTL) && defined(AR_SLOWDOWN_TREE)
+            slowdown_recovery_active_ = false;
+#endif
             ASSERT(checkParams());
 
             // particle number and data address
@@ -1925,7 +2001,21 @@ namespace AR {
          */
         InterruptBinary<Tparticle> integrateToTime(const Float _time_end) {
             ASSERT(checkParams());
-
+#if defined(AR_TTL) && defined(AR_SLOWDOWN_TREE)
+            slowdown_recovery_active_ = false;
+#endif
+            // A geometric hierarchy can undergo a close encounter/exchange.
+            // Keep local error control active for multiples even when the
+            // initial tree was classified stable. Preserve explicit 'always'.
+            if (particles.getSize()>2 && info.fix_step_option==FixStepOption::later) {
+                info.fix_step_option = FixStepOption::none;
+                std::ostringstream message;
+                message << std::setprecision(17)
+                        << "AR_ADAPTIVE_MULTIPLE time=" << time_+info.time_offset
+                        << " n=" << particles.getSize() << " fix_step=later->none\n";
+#pragma omp critical(ar_slowdown_diagnostic)
+                { std::cerr << message.str(); }
+            }
             // real full time step
             const Float dt_full = _time_end - time_;
 
@@ -2051,6 +2141,7 @@ namespace AR {
 */
             // warning print flag
             bool warning_print_once=true;
+            unsigned int nonpositive_step_count = 0;
 
 #ifdef AR_DEBUG_DUMP
             // back up initial data
@@ -2389,6 +2480,28 @@ namespace AR {
                 
                 step_count++;
 
+                // Bound retries even when rounded time increments reach zero.
+                // This runs before the energy-error retry path, which could
+                // otherwise bypass the negative-time check indefinitely.
+                if (!(dt>0.0) || ISINF(dt)) {
+                    ++nonpositive_step_count;
+                    if (nonpositive_step_count>=64 || ISNAN(dt) || ISINF(dt)) {
+                        std::cerr << std::setprecision(17)
+                                  << "AR_TIME_STALL time=" << time_+info.time_offset
+                                  << " dt=" << dt << " ds=" << ds[ds_switch]
+                                  << " retries=" << nonpositive_step_count
+#ifdef AR_TTL
+                                  << " drift=" << gt_drift_inv_ << " kick=" << gt_kick_inv_
+#endif
+                                  << std::endl;
+#ifdef AR_DEBUG_DUMP
+                        DATADUMP("dump_time_stall");
+#endif
+                        abort();
+                    }
+                }
+                else nonpositive_step_count = 0;
+
                 // energy check
 #if (defined AR_SLOWDOWN_ARRAY) || (defined AR_SLOWDOWN_TREE)
                 Float energy_error_bk = getEnergyErrorSlowDownFromBackup(backup_data);
@@ -2652,9 +2765,9 @@ namespace AR {
 //#endif
 
                 // if negative step, reduce step size
-                if(!time_end_flag&&dt<0) {
+                if(!time_end_flag&&dt<=0) {
                     // limit step_modify_factor to 0.125
-                    step_modify_factor = std::min(std::max(regularStepFactor(manager->step.calcStepModifyFactorFromErrorRatio(abs(_time_end/dt))), Float(0.0625)),Float(0.5)); 
+                    step_modify_factor = dt==0.0 ? Float(0.5) : std::min(std::max(regularStepFactor(manager->step.calcStepModifyFactorFromErrorRatio(abs(_time_end/dt))), Float(0.0625)),Float(0.5)); 
                     ASSERT(step_modify_factor>0.0);
                     previous_step_modify_factor = step_modify_factor;
                     previous_error_ratio = integration_error_ratio;
@@ -3525,6 +3638,9 @@ namespace AR {
         /*! @param[in] _fin: file IO for read
          */
         void readBinary(FILE *_fin) {
+#if defined(AR_TTL) && defined(AR_SLOWDOWN_TREE)
+            slowdown_recovery_active_ = false;
+#endif
             size_t rcount = fread(&time_, sizeof(Float), 1, _fin);
             rcount += fread(&etot_ref_, sizeof(Float), 1, _fin);
             rcount += fread(&ekin_, sizeof(Float), 1, _fin);

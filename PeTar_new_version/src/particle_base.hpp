@@ -40,6 +40,7 @@ public:
     // callback distinguish harmless phase advance from a real perturbation.
     PS::F64 merger_semi=-1.0;
     PS::F64 merger_ecc=-1.0;
+    PS::F64 merger_record_time=-1.0; // epoch of cached prediction orbit
     PS::F64vec spin;
 #endif
 #ifdef BSE_BASE
@@ -92,6 +93,7 @@ public:
         time_merger = -1.0;
         merger_semi = -1.0;
         merger_ecc = -1.0;
+        merger_record_time = -1.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -116,6 +118,7 @@ public:
         time_merger = -1.0;
         merger_semi = -1.0;
         merger_ecc = -1.0;
+        merger_record_time = -1.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -139,6 +142,7 @@ public:
         time_merger = -1.0;
         merger_semi = -1.0;
         merger_ecc = -1.0;
+        merger_record_time = -1.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -427,6 +431,7 @@ public:
         time_merger = din.time_merger;
         merger_semi = din.merger_semi;
         merger_ecc = din.merger_ecc;
+        merger_record_time = din.merger_record_time;
         spin = din.spin;
 #endif
 #ifdef BSE_BASE

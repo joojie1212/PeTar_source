@@ -267,6 +267,9 @@ build/petar.tide_collision.test: test/tide_collision.cxx $(HARD_SRC) two_body_ti
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
 
 # Compile-time isolated regression for the optional frozen-binary policy.
+build/petar.orbit_change.test: test/orbit_change.cxx $(HARD_SRC) bhmerger_output.hpp $(BSELIBFILES) |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
+
 build/petar.frozen_binary.test: test/frozen_binary.cxx $(HARD_SRC) two_body_tide.hpp $(BSELIBFILES) |build
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -D FROZEN_BINARY -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
 

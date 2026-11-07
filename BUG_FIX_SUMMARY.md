@@ -1,8 +1,10 @@
 # Bug 最小修复汇总
 
-修复日期：2026-11-04  
-依据：`bugs/BUG_TABLE.md` 中 B01–B40，以及后续报告的近共振异常 B41、SIMD 静态 TLS 启动崩溃 B42，并按当前工作区源码重新核对。  
-状态统计：**已修复 38 项；当前版本未复现/路径已串行 2 项；部分修复 2 项。**
+首次修复日期：2026-11-04；最近补充修复：2026-11-07（B43）。
+
+依据：`bugs/BUG_TABLE.md` 中 B01–B40，以及后续报告的近共振异常 B41、SIMD 静态 TLS 启动崩溃 B42、hard 能量并发汇总丢账 B43。
+
+状态统计：**已修复 39 项；当前版本未复现/路径已串行 2 项；部分修复 2 项。**
 
 状态说明：
 
@@ -56,8 +58,62 @@
 | B40 | petar | 部分修复 | 去掉进动输出相位分支的 `np.random.choice`，改为保持初始有向相位；未把 BSE Fortran 与所有 BH 随机源的完整状态加入常规检查点。 | 相位分支已确定；连续运行与中途重启的完整随机序列仍不能保证逐事件一致。 |
 | B41 | petar | 已修复 | 当完整 `inspiral_precav` 因近共振的非有限进动周期而失败时，C++ 桥接层先仅请求演化后的守恒量和三个 `deltachi` 根，避开随机进动相位采样；仅在两个物理解根按尺度相关容差确认合并后，调用库内已有 `deltachiresonance` 取共振极限，再由 `conserved_to_angles` 重建末端自旋角并保持初始相位分支。Python 源码未改。 | 注入同型 `OverflowError` 后成功恢复有限角度；根未合并时不会误用共振解，仍回退到遭遇时刻自旋。正常非共振路径不变。 |
 | B42 | petar | 已修复 | x86 SIMD 力核的多个大型 `static thread_local PhantomGrapeQuad` 改为线程局部 `unique_ptr` 首次使用时堆分配，并为缓冲类型显式增加 64 字节对齐；暗物质 SIMD 力核同步处理。保留每线程独立实例和 SIMD 算法。 | 发布程序 `.tbss` 由约 18.1 MiB 降至约 5.1 KiB；默认 8 MiB 栈下 `petar -h` 返回 0。回归检查堆缓冲对齐、SIMD/标量力与邻居数一致，并限制测试程序 `.tbss <= 1 MiB`。 |
+| B43 | petar / hard 能量汇总 | 已修复 | 为 `SystemHard::driveForMultiClusterOMP()` 和 `finishIntegrateInterruptClustersOMP()` 中共享的 `energy += ...` 增加同名 `omp critical(petar_hard_energy_accumulate)`，保护完整 `HardEnergy` 累加，防止十个能量字段被并发覆盖。 | 完整构建通过；实际四线程积分中的累计不一致次数由修复前 755 次降为 0，末尾残差与单线程参考一致。已备份并更新安装主程序；历史模拟尚未重跑，中断恢复分支尚未专项运行验证。 |
 
-## 验证结果
+## B43 修复过程（2026-11-07）
+
+### 发现与定位
+
+在比较 N=500、1000、2000、4000、10000 的能量曲线时，发现 N=1000 在 ID 39/944 并合所在输出区间出现约 −44.33% 的相对残差跳变。该残差已经扣除了代码记录的 interrupt 等物理修正，不能直接解释为引力波辐射损失。
+
+先复放原始 `dump_merger.0.3.1.1793873237`：该步骤从 `0.0003262832760810852 Myr` 开始，包含五次轨道修改和一次并合。局部 interrupt 净修正约为 `+1.9823437109e9`；加入质心动能修正后约为 `+1.9822877063e9`，与直接计算的初末粒子动能加势能之差一致，相对差约 `3.6e-16`。因此，这次局部并合步骤没有显示出修正公式本身的错误。
+
+进一步检查发现，[hard.hpp](PeTar_new_version/src/hard.hpp) 的两个 OpenMP 并行循环均直接写共享成员 `SystemHard::energy`：
+
+- `driveForMultiClusterOMP()`：各 cluster 完成积分后汇总能量。
+- `finishIntegrateInterruptClustersOMP()`：中断 cluster 恢复并完成积分后汇总能量。
+
+`HardEnergy::operator+=` 对十个浮点字段逐一执行普通读、加、写，没有同步保护。不同线程可覆盖彼此的贡献，且 total modify、interrupt、hard error 和 slowdown 字段可能丢失不同的量。循环末尾的 barrier 不能避免循环内部的数据竞争。这与 B01 所检查的单个 Hermite 系统内部按组串行积分不是同一条路径。
+
+### 最小修复
+
+在上述两处 `energy += ...` 外使用同名临界区：
+
+```cpp
+#pragma omp critical(petar_hard_energy_accumulate)
+{
+    energy += /* 当前 cluster 的 HardEnergy */;
+}
+```
+
+锁保护的是整笔十字段汇总，未改变并合物理公式、积分参数或已有模拟数据。也未将其他 PROFILE 计数的并发问题混入此次修复。
+
+### 验证证据
+
+1. **并发压力复现：** 使用实际 `HardEnergy` 类型，四线程累计 200000 个可精确表示的正负整数贡献，正确和为 100000。无保护版本五次试验的 total modify 为 73990、83993、80203、79830、80256，各能量字段还出现不同差额；加锁后五次试验的各检查字段均为 100000。该压力测试比例不代表原星团运行的丢账比例。
+2. **真实积分路径：** 在诊断副本中另设线程独立的旁路累计器，dispatch 结束后串行求和，与原共享累计比较。从原 N=1000 的 `data.27` 短程运行，四线程无保护版本出现 755 次不一致；单线程和加锁后的四线程均为 0 次。此段当前代码重跑未重现原并合历史，用于核对汇总路径，不用于解释全部历史残差。
+3. **正式修复验证：** 应用两处修补后，`make -C PeTar_new_version -j2 all` 成功。再从正式源码制作旁路核对版本，四线程短程运行完成，累计不一致为 0；末尾相对残差为 `−8.53631093197093e−6`，与单线程参考一致。
+4. **覆盖范围：** 普通多 cluster 汇总路径已运行验证；中断恢复路径采用相同保护，已编译和静态检查，但本次默认 interrupt mode=1 的短程运行未专项触发该恢复分支。未将 2026-11-04 的整套 sanitizer 回归声称为本次重新执行的结果。
+
+### 安装与结果解释
+
+已备份并更新 `/home/joojie/bin/petar` 指向的主程序 `/home/joojie/bin/petar.mpi.omp.avx2.bse.tt2nd`。旧程序备份为：
+
+```text
+/home/joojie/bin/petar.mpi.omp.avx2.bse.tt2nd.before-energy-fix-aefbd62761
+```
+
+安装文件与工作区构建文件的 SHA256 一致：
+
+```text
+a78dd82f1ca4f60161046876b341d3e696692ba29ca7f590662306ec2147a4a6
+```
+
+这项修复确认解决共享汇总的数据竞争，但尚未定量证明原 −44.33% 跳变全部由此造成。`error_hard_cum` 同样经过有缺陷的汇总路径，因此旧日志中总误差与 hard 误差的相关性不能单独证明积分器精度不足。旧输出缺少每个线程每步的贡献，不能可靠地事后修补；需用修复后的程序重跑，再更新能量曲线和物理解读。
+
+本地证据见 [核查报告](diagnostics/merger_energy_audit/REPORT.md)、[修复报告](diagnostics/merger_energy_fix/REPORT.md)、[验证数据](diagnostics/merger_energy_fix/validation.json) 和 [安装记录](diagnostics/merger_energy_fix/installation.json)。这些诊断目录被 `.gitignore` 排除，不随源码提交；关键发现与验证结果已在本节保留。
+
+## 初次验证结果（2026-11-04，B01–B42）
 
 - `make -C PeTar_new_version -j2 all`：通过；生成默认 MPI/OpenMP/AVX2/BSE 主程序、hard-debug 和格式转换工具。
 - `bash PeTar_new_version/test/bugfix/run.sh`：通过：
@@ -67,7 +123,7 @@
   - Python remnant 异常、近共振恢复/非共振拒绝恢复与引用保留量回归；
   - Python 进动相位符号回归。
 - 可选宏语法编译均通过：`AR_TIME_FUNCTION_MULTI_R`、`AR_SLOWDOWN_MASSRATIO`（含二者组合）、`AR_CHANGEOVER`、`INTEGRATED_CUTOFF_FUNCTION`、`HERMITE_DEBUG`、`USE_QUAD+AVX_PRELOAD`。
-- 现有 Peters 合并时间测试通过：最大采样相对误差 `0.00113518`；渐近切换跳变 `0.020585`。该功能及其测试属于修复前已存在的用户工作，不计入本表 38 项修复。
+- 现有 Peters 合并时间测试通过：最大采样相对误差 `0.00113518`；渐近切换跳变 `0.020585`。该功能及其测试属于修复前已存在的用户工作，不计入当时的 38 项修复或本次更新后的 39 项修复。
 
 ## 已知限制与兼容性
 
@@ -77,12 +133,12 @@
 4. `1013_new_4` 中现存的 hard-debug dump 是旧 `SymplecticStep` 裸指针格式，当前程序会按 B39 的安全校验明确拒绝，因此无法用新版二进制直接复放该历史事件。B41 已用同型 `OverflowError` 和近/非近共振根的注入回归验证；仍建议用兼容当前格式的新生产运行复核总体 remnant 统计分布。
 5. `inspiralZJ.cpp` 与 bundled `eccentricity.py` 原文件使用 CRLF；本次保留其换行风格，未做无关的全文件格式化。B41 未修改 Python 源码。
 
-## 源码版本说明
+## 初次修复的源码版本说明（2026-11-04）
 
-本地 `main`、`HEAD` 与本地保存的 `origin/main` 均为：
+当时本地 `main`、`HEAD` 与本地保存的 `origin/main` 均为：
 
 `06fe527376ecf6aab627155b570e0c2b7de86a68`（2026-10-21，`a new function, refind tree time step when cluster calculation too expansive`）。
 
-2026-11-04 在线执行 `git ls-remote origin refs/heads/main` 成功，远端返回同一提交 `06fe527376ecf6aab627155b570e0c2b7de86a68`；因此已确认当前源码基线与 GitHub 仓库最新 `main` 一致。安装的程序还包含本表所列、尚未提交的工作区修复。
+2026-11-04 在线执行 `git ls-remote origin refs/heads/main` 成功，远端返回同一提交 `06fe527376ecf6aab627155b570e0c2b7de86a68`；因此确认了当时的源码基线与 GitHub 仓库 `main` 一致。当时安装的程序还包含本表 B01–B42 中已实施、尚未提交的工作区修复；此处不是 2026-11-07 的远端状态核对。
 
 工作区在修复前已有用户修改（包括 Peters 合并时间相关文件、`README.md`、`Makefile.in` 和 `ar_interaction.hpp` 的部分内容）；本次修复保留了这些修改，没有重置或覆盖。
