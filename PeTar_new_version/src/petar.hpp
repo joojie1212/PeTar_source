@@ -21,6 +21,7 @@
 #include<iostream>
 #include<iomanip>
 #include<fstream>
+#include<filesystem>
 #include<string>
 #include<sstream>
 #include<cstdlib>
@@ -93,6 +94,8 @@ int MPI_Irecv(void* buffer, int count, MPI_Datatype datatype, int dest, int tag,
 #endif
 #include"static_variables.hpp"
 #include"escaper.hpp"
+#include"escape_removal.hpp"
+#include <unordered_set>
 #ifdef GALPY
 #include"galpy_interface.h"
 #endif
@@ -634,8 +637,8 @@ public:
                 break;
             case 'p':
                 fname_par.value = optarg;
-                if(print_flag) {
-                    fname_par.print(std::cout);
+                if(PS::Comm::getRank()==0) {
+                    if(print_flag) fname_par.print(std::cout);
                     FILE* fpar_in;
                     if( (fpar_in = fopen(fname_par.value.c_str(),"r")) == NULL) {
                         fprintf(stderr,"Error: Cannot open file %s.\n", fname_par.value.c_str());
@@ -714,13 +717,19 @@ public:
         assert(dt_limit_hard_factor.value > 0.0);
         assert(dt_min_hermite_index.value > 0);
         assert(e_err_ar.value > 0.0);
-        assert(eps.value>=0.0 && eps.value<=ratio_r_cut.value); // avoid incorrect self-potential correction after tree force, when eps>r_out, self-potential is G m /r_eps instead of G m/r_cut;
+        if (!std::isfinite(eps.value) || eps.value<0.0) {
+            std::cerr << "Error: softening length must be finite and nonnegative" << std::endl;
+            PS::Abort();
+        }
         assert(sd_factor.value>0.0);
         assert(ratio_r_cut.value>0.0);
         assert(ratio_r_cut.value<1.0);
         assert(r_bin.value>=0.0);
         assert(search_peri_factor.value>=1.0);
-        assert(data_format.value>=0||data_format.value<=3);
+        if (data_format.value<0 || data_format.value>3) {
+            std::cerr << "Invalid data format: expected 0..3\n";
+            abort();
+        }
         assert(time_end.value>=0.0);
         assert(dt_soft.value>=0.0);
         assert(dt_snap.value>0.0);
@@ -926,7 +935,11 @@ public:
 
     //! regular block time step
     PS::F64 regularTimeStep(const PS::F64 _dt) {
-        // regularize dt_tree
+        // Reject degenerate inputs instead of looping or returning a zero step.
+        if (!std::isfinite(_dt) || !(_dt>0.0)) {
+            std::cerr << "Tree time step must be finite and positive\n";
+            abort();
+        }
         PS::F64 dt = 1.0;
         if (_dt<1) while (dt>_dt) dt *= 0.5;
         else {
@@ -967,7 +980,7 @@ public:
 #endif
         // >2.1 search clusters ----------------------------------------
         search_cluster.searchNeighborOMP<SystemSoft, TreeNB, EPJSoft>
-            (system_soft, tree_nb, pos_domain, 1.0, input_parameters.search_peri_factor.value);
+            (system_soft, tree_nb, pos_domain, input_parameters.gravitational_constant.value, input_parameters.search_peri_factor.value);
 
         search_cluster.searchClusterLocal();
         search_cluster.setIdClusterLocal();
@@ -1984,7 +1997,6 @@ public:
 #endif
 
         if (n_interrupt_connected_glb==0) {
-            PS::ReallocatableArray<PS::S32> mass_modify_list;
             search_cluster.writeAndSendBackPtcl(system_soft, system_hard_connected.getPtcl(), mass_modify_list);
             system_hard_connected.updateTimeWriteBack();
         }
@@ -2288,7 +2300,7 @@ public:
     }
 
     //! output data
-    void output() {
+    void output(const bool protect_input = false) {
 #ifdef PROFILE
         profile.output.start();
 #endif
@@ -2307,6 +2319,14 @@ public:
 #ifdef DARKMATTER
         if (write_style>0) writeDarkMatterStatus();
 #endif
+        // Particle counts are available here, after input has been read.
+        if (write_style>0 && my_rank==0 && fstatus.tellp()==std::streampos(0)) {
+            stat.printColumnTitle(fstatus, WRITE_WIDTH);
+            if (write_style==2)
+                for (int i=0; i<stat.n_real_loc; ++i)
+                    system_soft[i].printColumnTitle(fstatus, WRITE_WIDTH);
+            fstatus<<std::endl;
+        }
         // write status, output to separate snapshots
         if(write_style==1) {
 
@@ -2323,6 +2343,14 @@ public:
 #ifdef PETAR_DEBUG
             assert(system_soft.getNumberOfParticleLocal()== stat.n_all_loc);
 #endif
+            int preserve_snapshot = 0;
+            if (protect_input && my_rank==0) {
+                std::error_code error;
+                preserve_snapshot = std::filesystem::equivalent(
+                    fname, input_parameters.fname_inp.value, error) && !error;
+            }
+            PS::Comm::broadcast(&preserve_snapshot, 1);
+            if (!preserve_snapshot) {
             system_soft.setNumberOfParticleLocal(stat.n_real_loc);
             if (input_parameters.data_format.value==1||input_parameters.data_format.value==3)
                 system_soft.writeParticleAscii(fname.c_str(), file_header);
@@ -2332,6 +2360,7 @@ public:
 #ifdef DARKMATTER
             writeDarkMatterSnapshot();
 #endif
+            }
 
             if(my_rank==0) {
                 // status output
@@ -2340,7 +2369,7 @@ public:
 
 #ifdef GALPY
                 // for External potential
-                galpy_manager.writePotentialPars(fname+".galpy", stat.time);
+                if (!preserve_snapshot) galpy_manager.writePotentialPars(fname+".galpy", stat.time);
 #endif
             }
         }
@@ -2746,82 +2775,127 @@ public:
         // first remove artificial particles
         system_soft.setNumberOfParticleLocal(stat.n_real_loc);
 
-        // set flag for particles in remove_list
-        PS::S32 n_remove = remove_list.size();
-        for (PS::S32 i=0; i<n_remove; i++) {
-            auto& pi = system_soft[remove_list[i]];
-            pi.group_data.artificial.setParticleTypeToUnused(); // sign for removing
-            // if mass is not zero, correct energy
-            if (pi.mass>0) {
-                PS::F64 dpot = pi.mass*pi.pot_tot;
-                PS::F64vec energy_vel = pi.vel;
+        // Collect only radial candidates, explicit removals, and their partners.
+        // All ranks must participate: a binary can straddle a domain boundary.
+        std::unordered_set<PS::S64> forced_ids;
+        for(PS::S32 k=0;k<remove_list.size();++k)
+            forced_ids.insert(system_soft[remove_list[k]].id);
+        PS::F64vec center_pos=stat.pcm.pos, center_vel=stat.pcm.vel, energy_vel_offset=0.0;
 #ifdef RECORD_CM_IN_HEADER
-                energy_vel += stat.pcm.vel;
+        center_pos=center_vel=PS::F64vec(0.0);
+        energy_vel_offset=stat.pcm.vel;
 #endif
-                PS::F64 dkin = 0.5*pi.mass*(energy_vel*energy_vel);
-                PS::F64 eloss = dpot + dkin;
-                stat.energy.etot_ref -= eloss;
-                stat.energy.de_change_cum -= eloss;
-                stat.energy.etot_sd_ref -= eloss;
-                stat.energy.de_sd_change_cum -= eloss;
-                pi.mass = 0.0;
+        auto pack = [&](const auto& p) {
+            EscapeCandidate c;
+            c.id=p.id;c.partner=p.getBinaryPairID();c.mass=p.mass;c.pos=p.pos;c.vel=p.vel;
+            c.forced=forced_ids.count(p.id)!=0;
+            return c;
+        };
+        std::vector<EscapeCandidate> local;
+        for(PS::S32 i=0;i<stat.n_real_loc;++i) {
+            const auto& p=system_soft[i];const auto dr=p.pos-center_pos;
+            if(p.mass>0 && ((dr*dr)>=escaper.r_escape_sq || forced_ids.count(p.id)))
+                local.push_back(pack(p));
+        }
+        auto candidates=EscapeRemoval::gather(local);
+        if(!candidates.empty()) {
+            std::unordered_set<PS::S64> present,requested;
+            for(const auto& p:candidates) {present.insert(p.id);requested.insert(p.partner);}
+            for(PS::S32 i=0;i<stat.n_real_loc;++i) {
+                const auto& p=system_soft[i];
+                if(p.mass>0 && requested.count(p.id) && !present.count(p.id)) local.push_back(pack(p));
+            }
+            candidates=EscapeRemoval::gather(local);
+        }
+        const double G=input_parameters.gravitational_constant.value;
+        const double eps2=input_parameters.eps.value*input_parameters.eps.value;
+        std::vector<double> phi_local(candidates.size(),0), phi(candidates.size(),0);
+        // Re-evaluate from the synchronized post-drift state, not old pot_tot.
+        // Cost is O(N_candidates*N_local), with no all-gather of the cluster.
+#pragma omp parallel for
+        for(size_t k=0;k<candidates.size();++k) {
+            for(PS::S32 i=0;i<stat.n_real_loc;++i) {
+                const auto& p=system_soft[i];
+                if(p.mass<=0 || p.id==candidates[k].id) continue;
+                auto dr=candidates[k].pos-p.pos;
+                phi_local[k]-=G*p.mass/std::sqrt(dr*dr+eps2);
             }
         }
+        EscapeRemoval::sumPotentials(phi_local,phi);
+#ifdef GALPY
+        if(!candidates.empty()) galpy_manager.updatePotential(stat.time,true);
+        for(size_t k=0;k<candidates.size();++k) {
+            auto global=candidates[k].pos,relative=candidates[k].pos-center_pos;
+#ifdef RECORD_CM_IN_HEADER
+            global+=stat.pcm.pos;
+#endif
+            double acc[3],pot;
+            // gm=0: read the current external potential without adding a
+            // duplicate reaction force to moving galpy potential sources.
+            galpy_manager.calcAccPot(acc,pot,stat.time,0.0,&global[0],&relative[0]);
+            phi[k]+=pot;
+        }
+#endif
+        auto selection_phi=phi;
+#ifdef DARKMATTER
+        // Stellar status excludes star-DM cross energy; include DM for escape
+        // selection only, matching stellarEnergyPotential()'s energy convention.
+        if(darkMatterEnabled() && !candidates.empty()) {
+            std::vector<double> dm_local(candidates.size(),0),dm_global(candidates.size(),0);
+            for(size_t k=0;k<candidates.size();++k)
+                for(PS::S32 i=0;i<system_dm.getNumberOfParticleLocal();++i) {
+                    auto dr=candidates[k].pos-system_dm[i].pos;
+                    dm_local[k]-=G*system_dm[i].mass/std::sqrt(dr*dr+dm_file_header.eps*dm_file_header.eps);
+                }
+            EscapeRemoval::sumPotentials(dm_local,dm_global);
+            for(size_t k=0;k<candidates.size();++k) selection_phi[k]+=dm_global[k];
+        }
+#endif
+        auto decision=EscapeRemoval::decide(candidates,selection_phi,escaper.r_escape_sq,
+                                            escaper.check_energy_flag,G,eps2,center_pos,center_vel);
+        const double energy_change=EscapeRemoval::energyChange(candidates,phi,decision.remove,
+                                                               G,eps2,energy_vel_offset);
+        // Every rank holds the same complete deletion set and global delta.
+        // Never apply a rank-local correction to a global reference energy.
+        stat.energy.etot_ref += energy_change;
+        stat.energy.de_change_cum += energy_change;
+        stat.energy.etot_sd_ref += energy_change;
+        stat.energy.de_sd_change_cum += energy_change;
+
+        std::unordered_map<PS::S64,size_t> selected;
+        for(size_t k=0;k<candidates.size();++k)
+            if(decision.remove[k]) selected.emplace(candidates[k].id,k);
         remove_list.resizeNoInitialize(0);
-
-        // check all particles escaper status and remove
-        const PS::S32 num_thread = PS::Comm::getNumberOfThread();
-        PS::ReallocatableArray<PS::S32> remove_list_thx[num_thread];
-        for (PS::S32 i=0; i<num_thread; i++) remove_list_thx[i].resizeNoInitialize(0);
-
-        PS::F64 escaper_energy_loss = 0.0;
-#pragma omp parallel reduction(+:escaper_energy_loss)
-        { 
-            const PS::S32 ith = PS::Comm::getThreadNum();
-#pragma omp for 
-            for (PS::S32 i=0; i<stat.n_real_loc; i++) {
-                auto& pi = system_soft[i];
-                if (escaper.isEscaper(pi,stat.pcm)) {
-                    remove_list_thx[ith].push_back(i);
-                    PS::F64 dpot = pi.mass*pi.pot_tot;
-                    PS::F64vec energy_vel = pi.vel;
-#ifdef RECORD_CM_IN_HEADER
-                    energy_vel += stat.pcm.vel;
-#endif
-                    PS::F64 dkin = 0.5*pi.mass*(energy_vel*energy_vel);
-                    PS::F64 eloss = dpot + dkin;
-                    escaper_energy_loss += eloss;
+        int n_esc=0;
+        for(PS::S32 i=0;i<stat.n_real_loc;++i) {
+            auto& p=system_soft[i];auto it=selected.find(p.id);
+            if(it!=selected.end() || (p.mass==0 &&
+                    (p.group_data.artificial.isUnused() || forced_ids.count(p.id)))) {
+                remove_list.push_back(i);remove_id_record.push_back(p.id);
+                if(p.mass>0 && !decision.forced[it->second]) {
+                    if(input_parameters.write_style.value>0) {
+                        // Escape output now carries current, not stale, potential.
+                        p.pot_tot=selection_phi[it->second];
+                        fesc<<std::setw(WRITE_WIDTH)<<stat.time;
+                        p.printColumn(fesc,WRITE_WIDTH);fesc<<std::endl;
+                    }
+                    ++n_esc;
                 }
-                // Registered removed particles have already done energy correction
-                else if (pi.mass==0.0&&pi.group_data.artificial.isUnused()) 
-                    remove_list_thx[ith].push_back(i);
             }
         }
-
-        stat.energy.etot_ref -= escaper_energy_loss;
-        stat.energy.de_change_cum -= escaper_energy_loss;
-        stat.energy.etot_sd_ref -= escaper_energy_loss;
-        stat.energy.de_sd_change_cum -= escaper_energy_loss;
-
-        // gether remove indices
-        int n_esc=0;
-        for (PS::S32 i=0; i<num_thread; i++) 
-            for (PS::S32 k=0; k<remove_list_thx[i].size(); k++) {
-                PS::S32 index=remove_list_thx[i][k];
-                remove_list.push_back(index);
-                remove_id_record.push_back(system_soft[index].id);
-                if (system_soft[index].mass>0) {
-                    if (input_parameters.write_style.value>0) {
-                        fesc<<std::setw(WRITE_WIDTH)<<stat.time;
-                        system_soft[index].printColumn(fesc,WRITE_WIDTH);
-                        fesc<<std::endl;
-                    }
-                    n_esc++;
-                }
-            }
+#ifdef ESCAPE_REMOVAL_DEBUG
+        if(PS::Comm::getRank()==0 && !selected.empty()) {
+            std::cerr<<std::setprecision(17)<<"ESCAPE_REMOVAL time="<<stat.time
+                     <<" n="<<selected.size()<<" delta_energy="<<energy_change<<" ids=";
+            for(size_t k=0;k<candidates.size();++k) if(decision.remove[k])
+                std::cerr<<candidates[k].id<<":"
+                         <<(decision.mate[k]>=0?candidates[decision.mate[k]].id:0)<<",";
+            std::cerr<<std::endl;
+        }
+#endif
 
         // Remove particles
-        n_remove = remove_list.size();
+        const PS::S32 n_remove = remove_list.size();
         system_soft.removeParticle(remove_list.getPointer(), remove_list.size());
 
         stat.n_escape_glb += PS::Comm::getSum(n_esc);
@@ -3078,6 +3152,12 @@ public:
         fout<<"Calculate GPU profile\n";
 #endif
 
+#ifdef HARD_DUMP
+        fout<<"Enable hard-system diagnostic dumps\n";
+#endif
+#ifdef AR_DEBUG_DUMP
+        fout<<"Enable AR diagnostic dumps\n";
+#endif
         AR::printFeatures(fout);
         H4::printFeatures(fout);
     }
@@ -3194,12 +3274,6 @@ public:
                 fstatus.open((fname_snp+".status").c_str(),std::ofstream::out|std::ofstream::app);
             else {
                 fstatus.open((fname_snp+".status").c_str(),std::ofstream::out);
-                // write titles of columns
-                stat.printColumnTitle(fstatus,WRITE_WIDTH);
-                if (write_style==2) {
-                    for (int i=0; i<stat.n_real_loc; i++) system_soft[0].printColumnTitle(fstatus, WRITE_WIDTH);
-                }
-                fstatus<<std::endl;
             }
             fstatus<<std::setprecision(WRITE_PRECISION);
         }
@@ -3246,6 +3320,14 @@ public:
                 fname_snp + ".change",
                 input_parameters.append_switcher.value == 1,
                 my_rank == 0, 17);
+            int merger_logs_ready =
+                hard_manager.ar_manager.interaction.bhmerger_output.isOpen() &&
+                hard_manager.ar_manager.interaction.change_output.isOpen();
+            PS::Comm::broadcast(&merger_logs_ready, 1);
+            if (!merger_logs_ready) {
+                std::cerr << "Error: cannot initialize shared merger logs" << std::endl;
+                PS::Abort();
+            }
             // Rank 0 must finish creating the shared file and its header before
             // another rank can append a merger event.
             PS::Comm::barrier();
@@ -3523,7 +3605,8 @@ public:
         const PS::F64 m_tot = 1.0;
         const PS::F64 eng = -0.25;
 
-        ParticleDistributionGenerator::makePlummerModel(m_tot, n_glb, n_loc, mass, pos, vel, eng);
+        ParticleDistributionGenerator::makePlummerModel(m_tot, n_glb, n_loc, mass, pos, vel, eng, 0,
+                                                       input_parameters.gravitational_constant.value);
 
         PS::S64 i_h = n_glb/n_proc*my_rank;
         if( n_glb % n_proc  > my_rank) i_h += my_rank;
@@ -3785,7 +3868,7 @@ public:
         if (dt_soft==0.0) {
             if (n_glb==1) {
                 if (print_flag) std::cout<<"In one particle case, tree time step is finishing - starting time\n";
-                dt_soft = input_parameters.time_end.value - stat.time;
+                dt_soft = regularTimeStep(input_parameters.time_end.value - stat.time);
             }
             else {
                 // 1/nstep of a binary period with semi-major axis = r_int.
@@ -3833,6 +3916,12 @@ public:
         else
             dt_snap = int(dt_snap/dt_soft)*dt_soft;
 
+        // Compare lengths only after the physical changeover scale is known.
+        if (!(r_in>0.0) || !std::isfinite(r_in) || input_parameters.eps.value>r_in) {
+            std::cerr << "Error: softening length exceeds the base inner changeover radius "
+                      << r_in << std::endl;
+            PS::Abort();
+        }
         EPISoft::eps   = input_parameters.eps.value;
         EPISoft::r_out = r_out;
         ForceSoft::grav_const = input_parameters.gravitational_constant.value;
@@ -4114,7 +4203,7 @@ public:
 
             // output initial data
             file_header.nfile--; // avoid repeating files
-            output();
+            output(true);
 
 #ifdef PROFILE
             clearProfile();
@@ -4183,7 +4272,7 @@ public:
 
         // output initial data
         file_header.nfile--; // avoid repeating files
-        output();
+        output(true);
 
         // remove artificial particles
         system_soft.setNumberOfParticleLocal(stat.n_real_loc);

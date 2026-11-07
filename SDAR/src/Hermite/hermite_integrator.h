@@ -1627,6 +1627,12 @@ namespace H4{
                 groupk.info.generateBinaryTree(groupk.particles,ar_manager->interaction.gravitational_constant);
                 
                 auto& bin_root = groupk.info.getBinaryTreeRoot();
+                if (bin_root.m1<=0.0 || bin_root.m2<=0.0) {
+                    // A bookkeeping root has no physical two-body orbit.
+                    _break_group_index_with_offset[_n_break++] = k + index_offset_group_;
+                    continue;
+                }
+
                 bool outgoing_flag = false; // Indicate whether it is a outgoing case or income case
 
                 // check binary case 
@@ -1856,7 +1862,8 @@ namespace H4{
 
             int new_n_particle = 0;
             // used_mask store the current group index of particle i if it is already in new group
-            int used_mask[n_particle+n_group];
+            std::vector<int> used_mask_storage(index_offset_group_+n_group, -2);
+            int* used_mask = used_mask_storage.data();
             // -1 means not yet used 
             for (int k=0; k<n_particle; k++) used_mask[k] = table_single_mask_[k]?-2:-1;
             for (int k=0; k<n_group; k++) used_mask[k+index_offset_group_] = table_group_mask_[k]?-2:-1;

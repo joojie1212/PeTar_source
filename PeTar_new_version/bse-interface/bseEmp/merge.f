@@ -1,6 +1,19 @@
-***
       SUBROUTINE MERGE(kstar,mass0,mass,rad,massc,radc,menv,renv,ospin,
      &     age,semi,ecc,vkick,zpars)
+* Preserve the legacy Fortran entry point.
+      implicit none
+      integer kstar(2)
+      real*8 mass0(2),mass(2),rad(2),massc(2),radc(2),menv(2)
+      real*8 renv(2),ospin(2),age(2),semi,ecc,vkick(8),zpars(20)
+      real*8 lumout(2),tmout(2)
+      call merge_structure(kstar,mass0,mass,rad,massc,radc,menv,
+     &     renv,ospin,age,semi,ecc,vkick,zpars,lumout,tmout)
+      return
+      end
+
+***
+      SUBROUTINE MERGE_STRUCTURE(kstar,mass0,mass,rad,massc,radc,
+     &     menv,renv,ospin,age,semi,ecc,vkick,zpars,lumout,tmout)
       implicit none
 *
 *
@@ -18,7 +31,8 @@
       PARAMETER (EPS = 1.0D-06, TOL = 1.0D-04, k3=0.21d0)
       REAL*8 RL
       EXTERNAL RL
-      LOGICAL coel
+      REAL*8 lumout(2),tmout(2),inertia
+      LOGICAL coel,use_ce
 * Tanikawa's BH model (prevent HGCE)
       logical nohgce
       integer krol(2)
@@ -52,11 +66,9 @@
           RL1 = RL2
       END IF
 
-      IF(RAD(I1).GE.RL1.AND.((kstar(i1).ge.2.AND.kstar(i1).le.6).or.
-     &     (kstar(i1).ge.8.and.kstar(i1).le.9)) )THEN
-
-*     Convert Roche radius, radius and initial & current mass to SU.
-         
+      use_ce = RAD(I1).GE.RL1.AND.
+     &     ((kstar(i1).ge.2.AND.kstar(i1).le.6).or.
+     &      (kstar(i1).ge.8.and.kstar(i1).le.9))
          DO k=1,2 
             CALL star(kstar(k),mass0(k),mass(k),tm,tn,tscls,
      &           lums,GB,zpars)
@@ -67,6 +79,7 @@
      &           +k3*radc(k)*radc(k)*massc(k))
          END DO
 
+      IF(use_ce)THEN
          CALL comenv(mass0(i1),mass(i1),massc(i1),age(i1),jspin(i1),
      &        kstar(i1),mass0(i2),mass(i2),massc(i2),age(i2),
      &        jspin(i2),kstar(i2),zpars,ecc,semi,jorb,
@@ -75,6 +88,34 @@
       ELSE
          CALL MIX(mass0,mass,age,kstar,zpars)
       END IF
+
+
+* Recompute the structure of each surviving star after CE/MIX.
+* Keep the returned CE angular momentum (or the retained MIX spin).
+      DO k=1,2
+         IF(mass(k).gt.0.d0.and.kstar(k).ne.15)THEN
+            CALL star(kstar(k),mass0(k),mass(k),tm,tn,tscls,
+     &           lums,GB,zpars)
+            CALL hrdiag(mass0(k),age(k),mass(k),tm,tn,tscls,lums,
+     &           GB,zpars,rad(k),lum,kstar(k),massc(k),radc(k),
+     &           menv(k),renv(k),k2,fbfac,fbtot,mco,ecs)
+            lumout(k) = lum
+            tmout(k) = tm
+            inertia = k2*rad(k)**2*(mass(k)-massc(k))
+     &              + k3*radc(k)**2*massc(k)
+            ospin(k) = 0.d0
+            IF(inertia.gt.0.d0) ospin(k) = jspin(k)/inertia
+         ELSE
+            rad(k) = 0.d0
+            massc(k) = 0.d0
+            radc(k) = 0.d0
+            menv(k) = 0.d0
+            renv(k) = 0.d0
+            ospin(k) = 0.d0
+            lumout(k) = 0.d0
+            tmout(k) = 0.d0
+         ENDIF
+      END DO
 
       RETURN
 

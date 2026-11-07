@@ -5,7 +5,7 @@
 
 class HermiteInformation{
 public:
-    Float time_origin; // time of origin
+    Float time_origin = 0.0; // time of origin
 
     //! check whether parameters values are correct
     /*! \return true: all correct
@@ -33,5 +33,5 @@ public:
     }
 
     //! clear function
-    void clear(){ }
+    void clear(){ time_origin = 0.0; }
 };

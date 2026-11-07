@@ -10,6 +10,13 @@ class KickDriftStep{
     std::vector<KDPair> coff_one_step_; // cofficient table for one full step
     std::vector<KDPair> coff_continue_; // cofficient table for continuing step (mergin first and last step)
 
+    void requireStep() const {
+        if (coff_one_step_.empty() || coff_continue_.empty()) {
+            std::cerr << "Error: call setStep before advancing or reading steps!\n";
+            abort();
+        }
+    }
+
 public:
 
     KickDriftStep(): ds_(0.0), mode_(0), count_one_step_(0), count_continue_(0), next_is_start_flag_(true), next_is_kick_flag_(true) {}
@@ -26,12 +33,14 @@ public:
 
     //! advance step count for one full step case
     void nextOneStep() {
+        requireStep();
         count_one_step_++;
         count_one_step_ %= coff_one_step_.size();
     }
 
     //! advance step count for continuing case
     void nextContinue() {
+        requireStep();
         if (next_is_start_flag_||(mode_==0&&!next_is_kick_flag_)||(mode_==1&&next_is_kick_flag_)) {
             std::cerr<<"Error: not finish one K-D pair, cannot go to next pair!\n";
             abort();
@@ -110,16 +119,19 @@ public:
     
     //! Get kick step size for one full step
     PS::F64 getDtKickOneStep() const {
+        requireStep();
         return coff_one_step_[count_one_step_][mode_];
     }
 
     //! Get drift step size for one full step   
     PS::F64 getDtDriftOneStep() const {
+        requireStep();
         return coff_one_step_[count_one_step_][1-mode_];
     }
 
     //! Get kick step size for continue case
     PS::F64 getDtKickContinue() {
+        requireStep();
         if (next_is_start_flag_) {
             std::cerr<<"Error: not yet call start step!\n";
             abort();
@@ -134,6 +146,7 @@ public:
 
     //! Get drift step size for continue case
     PS::F64 getDtDriftContinue() {
+        requireStep();
         if (next_is_start_flag_) {
             std::cerr<<"Error: not yet call start step!\n";
             abort();
@@ -148,24 +161,26 @@ public:
 
     //! Get staring step size for continue case
     PS::F64 getDtStartContinue() {
+        requireStep();
         if (!next_is_start_flag_) {
             std::cerr<<"Error: try to obtain the first step dt during the middle (count = "<<count_continue_<<")!\n";
             abort();
         }
         next_is_start_flag_ = false;
         next_is_kick_flag_ = !next_is_kick_flag_;
-        return coff_one_step_[0][mode_];
+        return coff_one_step_[0][0];
     }
 
     //! Get ending step size for continue case
     PS::F64 getDtEndContinue() {
+        requireStep();
         if (!isNextEndPossible()) {
             std::cerr<<"Error: try to obtain the last step dt during the middle (count = "<<count_continue_<<")!\n";
             abort();
         }
         // reset start flag to true
         next_is_start_flag_ = true;
-        return coff_one_step_[coff_one_step_.size()-1][mode_];
+        return coff_one_step_[coff_one_step_.size()-1][0];
     }
 
     //! get whether next is start 

@@ -336,8 +336,8 @@ PS_OMP_CRITICAL
                 increaseNExpand(n);
                 std::cout<<"function: "<<__FUNCTION__<<", line: "<<__LINE__<<", file: "<<__FILE__<<std::endl;
 #endif
-                capacity_ = getNewCapacity(n);
-                if(capacity_ >= LIMIT_NUMBER_OF_TREE_PARTICLE_PER_NODE){
+                const int requested_capacity = getNewCapacity(n);
+                if(requested_capacity >= LIMIT_NUMBER_OF_TREE_PARTICLE_PER_NODE){
                     PARTICLE_SIMULATOR_PRINT_ERROR("The number of particles of this process is beyound the FDPS limit number");
 #ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
                     int rank_tmp;

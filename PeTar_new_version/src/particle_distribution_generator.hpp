@@ -8,13 +8,7 @@ class ParticleDistributionGenerator {
     // x = sqrt(-2*sigma^2*ln(1-F))
     // 2sigma^2 = <e^2> or <i^2>
     // <> means R.M.S.
-    static double RayleighDistribution(const double sigma){
-        static PS::MTTS mt;
-        static bool first = true;
-        if(first){
-            mt.init_genrand( PS::Comm::getRank() );
-            first = false;
-        }
+    static double RayleighDistribution(PS::MTTS& mt, const double sigma){
         double F = mt.genrand_res53();
         /*
           double ret = 0.0;
@@ -29,13 +23,7 @@ class ParticleDistributionGenerator {
     // p(a)da = C*a^-0.5*da
     // P(a) = 2*C*(a^0.5 - a_in^0.5)
     // a = (P/(2C) + a_in^0.5)^2
-    static double HayashiDistribution(const double a_in, const double a_out){
-        static PS::MTTS mt;
-        static bool first = true;
-        if(first){
-            mt.init_genrand( PS::Comm::getRank() );
-            first = false;
-        }
+    static double HayashiDistribution(PS::MTTS& mt, const double a_in, const double a_out){
         const double C = 0.5 / (sqrt(a_out) - sqrt(a_in));
         double P = mt.genrand_res53();
         double ret = P/(2*C) + sqrt(a_in);
@@ -46,22 +34,12 @@ class ParticleDistributionGenerator {
 
     // p(a)da = C*a^(p+1)*da
     // P(a) = 2*C*(a^0.5 - a_in^0.5)
-    static double HayashiDistributionWithIceLine(const double a_in, const double a_out,
+    static double HayashiDistributionWithIceLine(PS::MTTS& mt, const double a_in, const double a_out,
                                           const double a_ice, const double f_ice=1.0, const double p_sigma=-1.5){
         //std::cout<<"a_in="<<a_in<<std::endl;
         //const PS::F64 p_sigma = -1.5;
         const PS::F64 p_mass = 2.0 + p_sigma;
         //std::cout<<"p_mass="<<p_mass<<std::endl;
-        static PS::MTTS mt;
-        //std::cout<<"check 0"<<std::endl;
-        static bool first = true;
-        //std::cout<<"check 1"<<std::endl;
-        //std::cout<<"PS::Comm::getRank()="<<PS::Comm::getRank()<<std::endl;
-        if(first){
-            mt.init_genrand( PS::Comm::getRank() );
-            first = false;
-        }
-        //std::cout<<"first="<<first<<std::endl;
         double P = mt.genrand_res53();
         double ret = 0.0;
         double C = 0.0;
@@ -147,9 +125,9 @@ public:
         for(long long int i=0; i<n_loc; i++){
             mass[i] = m_planet;
             COMM::Binary bin;
-            bin.semi = HayashiDistributionWithIceLine(a_in, a_out, a_ice, f_ice, power);
-            bin.ecc  = RayleighDistribution(e_sigma) * h;
-            bin.incline = RayleighDistribution(i_sigma) * h;
+            bin.semi = HayashiDistributionWithIceLine(mt, a_in, a_out, a_ice, f_ice, power);
+            bin.ecc  = RayleighDistribution(mt, e_sigma) * h;
+            bin.incline = RayleighDistribution(mt, i_sigma) * h;
             bin.rot_horizon = 2.0 * PI * mt.genrand_res53();
             bin.rot_self    = 2.0 * PI * mt.genrand_res53();
             double l = 2.0 * PI * mt.genrand_res53(); // mean anomayl
@@ -177,9 +155,10 @@ public:
                                  PS::F64vec *& pos,
                                  PS::F64vec *& vel,
                                  const double eng = -0.25,
-                                 const int seed = 0){
+                                 const int seed = 0,
+                                 const double gravitational_constant = 1.0){
 
-        assert(eng < 0.0);
+        assert(eng < 0.0 && mass_glb>0.0 && gravitational_constant>0.0);
         static const double PI = atan(1.0) * 4.0;
         const double r_cutoff = 22.8 / (-3.0 * PI * mass_glb * mass_glb / (64.0 * -0.25)); // 22.8 is cutoff in Nbody units
         //const double r_cutoff = 22.8 * 0.25;
@@ -234,8 +213,8 @@ public:
             vel[i] -= cm_vel;
         }
 
-        const double r_scale = -3.0 * PI * mass_glb * mass_glb / (64.0 * eng);
-        const double coef = 1.0 / sqrt(r_scale);
+        const double r_scale = -3.0 * PI * gravitational_constant * mass_glb * mass_glb / (64.0 * eng);
+        const double coef = sqrt(gravitational_constant * mass_glb / r_scale);
         for(PS::S32 i=0; i<n_loc; i++){
             pos[i] *= r_scale;
             vel[i] *= coef;

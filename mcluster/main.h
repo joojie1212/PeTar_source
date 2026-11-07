@@ -1,6 +1,7 @@
 //Constants
 //#define G 0.0043009211 //in pc*km^2*s^-2*Msun^-1
-#define G 0.00449850214  //in pc*km^2*s^-2*Msun^-1 consistent with IAU2009 SAC
+#define G 0.00449850214  // pc^3 / (Msun Myr^2)
+#define PC_MYR_TO_KMS (3.0856776e13 / 3.15576e13)
 #define Pi 3.14159265
 #define PI 3.14159265
 #define TWOPI 6.2831853   /* 2PI */
@@ -91,6 +92,7 @@ struct t_star2 *star2;
 
 //functions and COMMON blocks for SSE (Hurley, Pols & Tout, 2000, MNRAS, 315, 543) and BSE (Hurley, Tout & Pols, 2002, MNRAS, 329, 897)
 #ifdef SSE
+extern void instar_(void);
 extern void zcnsts_(double *z, double *zpars);
 extern void evolv1_(int *kw, double *mass, double *mt, double *r, double *lum, double *mc, double *rc, double *menv, double *renv, double *ospin, double *epoch, double *tms, double *tphys, double *tphysf, double *dtp, double *z, double *zpars, double *vkick);
 extern void evolv2_(int *kw, double *mass, double *mt, double *r, double *lum, double *mc, double *rc, double *menv, double *renv, double *ospin, double *epoch, double *tms, double *tphys, double *tphysf, double *dtp, double *z, double *zpars, double *tb, double *ecc, double *vkick);
@@ -203,3 +205,5 @@ int output3(char *output, int N, double rvir, double rh, double mmean, double M,
 int output4(char *output, int N, int NNBMAX, double RS0, double dtadj, double dtout, double tcrit, double rvir, double mmean, int tf, int regupdate, int etaupdate, int mloss, int bin, int esc, double M, double mlow, double mup, double MMAX, double epoch, double dtplot, double Z, int nbin, double Q, double *RG, double *VG, double rtide, int gpu, double **star, int sse, int seed, double extmass, double extrad, double extdecay, double extstart);
 void info(char *output, int N, double Mcl, int profile, double W0, double S, double D, double Q, double Rh, double gamma[], double a, double Rmax, double tcrit, int tf, double RG[], double VG[], int mfunc, double single_mass, double mlow, double mup, double alpha[], double mlim[], double alpha_L3, double beta_L3, double mu_L3, int weidner, int mloss, int remnant, double epoch, double Z, int prantzos, int nbin, double fbin, int pairing, double msort, int adis, double amin, double amax, int eigen, int BSE, double extmass, double extrad, double extdecay, double extstart, int code, int seed, double dtadj, double dtout, double dtplot, int gpu, int regupdate, int etaupdate, int esc, int units, int match, int symmetry, int OBperiods);
 void help(double msort);
+
+int output5(char *output, int N, int NNBMAX, double RS0, double dtadj, double dtout, double tcritp, double tcrit, double rvir, double mmean, int tf, int regupdate, int etaupdate, int mloss, int bin, int esc, double M, double mlow, double mup, double MMAX, double epoch, double dtplot, double Z, int nbin, double Q, double *RG, double *VG, double rtide, int gpu, double **star, int sse, int seed, double extmass, double extrad, double extdecay, double extstart);

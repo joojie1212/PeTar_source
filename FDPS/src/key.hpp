@@ -2,10 +2,23 @@
 
 #include<iostream>
 #include<iomanip>
+#include<cmath>
+#include<limits>
+#include<algorithm>
 #include"vector3.hpp"
 #include"ps_defs.hpp"
 
 namespace ParticleSimulator{
+    inline U64 CheckedMortonCoordinate(const F64 coordinate, const U64 cells) {
+        const F64 tolerance=32*std::numeric_limits<F64>::epsilon()*F64(cells);
+        if (!std::isfinite(coordinate) || coordinate < -tolerance
+            || coordinate > F64(cells)+tolerance) {
+            PARTICLE_SIMULATOR_PRINT_ERROR("Position outside the Morton root cell");
+            Abort(-1);
+        }
+        return U64(std::max(F64(0),std::min(F64(cells-1),coordinate)));
+    }
+
 
     /*
       MSB is always 0.
@@ -36,17 +49,21 @@ namespace ParticleSimulator{
         //MortonKey & operator = (const MortonKey &);
         void initialize(const F64 half_len,
                         const F64vec & center=0.0){
+            if (!(half_len>0.0) || !std::isfinite(half_len)) {
+                PARTICLE_SIMULATOR_PRINT_ERROR("Morton root half-length must be finite and positive");
+                Abort(-1);
+            }
             half_len_ = half_len;
             center_ = center;
-            normalized_factor_ = (1.0/(half_len*2.0))*(1<<kLevMax);
+            normalized_factor_ = 0.5*F64(U64(1)<<kLevMax);
         }
 
         KeyT getKey(const F64vec & pos) const {
             const F64vec cen = center_;
             const F64 hlen = half_len_;
             const F64 nfactor = normalized_factor_;
-            const U64 nx = (U64)( (pos.x - cen.x + hlen) * nfactor);
-            const U64 ny = (U64)( (pos.y - cen.y + hlen) * nfactor);
+            const U64 nx = CheckedMortonCoordinate(((pos.x-cen.x)/hlen+1.0)*nfactor, U64(1)<<kLevMax);
+            const U64 ny = CheckedMortonCoordinate(((pos.y-cen.y)/hlen+1.0)*nfactor, U64(1)<<kLevMax);
             return ( separateBit(nx)<<1 | separateBit(ny) );
         }
         template<typename Tkey>
@@ -156,17 +173,21 @@ namespace ParticleSimulator{
         
         void initialize(const F64 half_len,
                         const F64vec & center=0.0){
+            if (!(half_len>0.0) || !std::isfinite(half_len)) {
+                PARTICLE_SIMULATOR_PRINT_ERROR("Morton root half-length must be finite and positive");
+                Abort(-1);
+            }
             half_len_ = half_len;
             center_ = center;
-            normalized_factor_ = (1.0/(half_len*2.0))*(1UL<<kLevMax);
+            normalized_factor_ = 0.5*F64(U64(1)<<kLevMax);
         }
         KeyT getKey(F64vec pos) const {
             const F64vec cen = center_;
             const F64 hlen = half_len_;
             const F64 nfactor = normalized_factor_;
-            U64 nx = (U64)( (pos.x - cen.x + hlen) * nfactor);
-            U64 ny = (U64)( (pos.y - cen.y + hlen) * nfactor);
-            U64 nz = (U64)( (pos.z - cen.z + hlen) * nfactor);
+            U64 nx = CheckedMortonCoordinate(((pos.x-cen.x)/hlen+1.0)*nfactor, U64(1)<<kLevMax);
+            U64 ny = CheckedMortonCoordinate(((pos.y-cen.y)/hlen+1.0)*nfactor, U64(1)<<kLevMax);
+            U64 nz = CheckedMortonCoordinate(((pos.z-cen.z)/hlen+1.0)*nfactor, U64(1)<<kLevMax);
             
             // avoid to overflow
             nx = (((nx>>63)&0x1)==1) ? 0 : nx;

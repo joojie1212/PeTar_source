@@ -64,7 +64,7 @@ public:
             //soft_pert = &_tt[_n_tt];
             //_n_tt++;
         //}
-        if (-_tt[r_min_index].group_id==_gid) {
+        if (r_min_index>=0 && -_tt[r_min_index].group_id==_gid) {
             soft_pert = &_tt[r_min_index];
             soft_pert->group_id = _gid;
             // update c.m.

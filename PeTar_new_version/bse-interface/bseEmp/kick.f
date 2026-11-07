@@ -175,9 +175,19 @@
       ENDIF
 
 *     rescale base on new vk
-      do k = 1,3
-         v(k) = v(k)*vk/v(4)
-      end do
+      if(v(4).gt.0.d0)then
+         do k = 1,3
+            v(k) = v(k)*(vk/v(4))
+         end do
+      else
+* All current kick prescriptions scale the sampled magnitude.
+* A zero sample therefore has zero recoil; retain the RNG sequence.
+         do k = 1,3
+            v(k) = 0.d0
+         end do
+         vk = 0.d0
+         vk2 = 0.d0
+      endif
       v(4) = vk
 
       sphi = -1.d0 + 2.d0*u1

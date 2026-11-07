@@ -54,7 +54,7 @@ namespace ParticleSimulator{
         enum EXCHANGE_LET_MODE exchange_let_mode_ = EXCHANGE_LET_A2A;
         
         CountT n_interaction_ep_ep_local_, n_interaction_ep_sp_local_, n_walk_local_;
-        CountT * n_cell_open_;
+        CountT * n_cell_open_ = nullptr;
         
         bool is_initialized_;
 
@@ -95,11 +95,11 @@ namespace ParticleSimulator{
         ReallocatableArray< Tepj > epj_org_;
         ReallocatableArray< Tforce > force_sorted_; // -- final
 
-        ReallocatableArray<Tepj> * epj_for_force_;
-        ReallocatableArray<Tspj> * spj_for_force_;
-        ReallocatableArray<S32> * adr_epj_for_force_;
-        ReallocatableArray<S32> * adr_spj_for_force_;
-        ReallocatableArray<S32> * adr_ipg_for_force_;
+        ReallocatableArray<Tepj> * epj_for_force_ = nullptr;
+        ReallocatableArray<Tspj> * spj_for_force_ = nullptr;
+        ReallocatableArray<S32> * adr_epj_for_force_ = nullptr;
+        ReallocatableArray<S32> * adr_spj_for_force_ = nullptr;
+        ReallocatableArray<S32> * adr_ipg_for_force_ = nullptr;
 
         // for gather mode
         class EPJWithR{
@@ -119,14 +119,14 @@ namespace ParticleSimulator{
         ReallocatableArray<EPJWithR> epjr_recv_;
         ReallocatableArray<EPJWithR> epjr_recv_1st_buf_;
         ReallocatableArray<EPJWithR> epjr_recv_2nd_buf_;
-        ReallocatableArray<EPJWithR> * epjr_send_buf_; // for 1st communication
-        ReallocatableArray<EPJWithR> * epjr_send_buf_for_scatter_;
-        ReallocatableArray<EPJWithR> * epjr_recv_1st_sorted_;
+        ReallocatableArray<EPJWithR> * epjr_send_buf_ = nullptr; // for 1st communication
+        ReallocatableArray<EPJWithR> * epjr_send_buf_for_scatter_ = nullptr;
+        ReallocatableArray<EPJWithR> * epjr_recv_1st_sorted_ = nullptr;
         
 #ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
-        MPI_Request * req_send_;
-        MPI_Request * req_recv_;
-        MPI_Status  * status_;
+        MPI_Request * req_send_ = nullptr;
+        MPI_Request * req_recv_ = nullptr;
+        MPI_Status  * status_ = nullptr;
 #endif
         void calcMomentLocalTreeOnlyImpl(TagCalcMomLongEpjLt);
         void calcMomentLocalTreeOnlyImpl(TagCalcMomShortEpjLt);
@@ -338,7 +338,7 @@ PS_OMP_PARALLEL_FOR
         }
         
         // for neighbour search
-        ReallocatableArray<Tepj> * epj_neighbor_;
+        ReallocatableArray<Tepj> * epj_neighbor_ = nullptr;
         
         TimeProfile getTimeProfile() const {return time_profile_;}
         void clearTimeProfile(){time_profile_.clear();}
@@ -389,9 +389,13 @@ PS_OMP_PARALLEL_FOR
             delete [] epj_neighbor_;
             delete [] spj_for_force_;
             delete [] epj_for_force_;
+            delete [] adr_epj_for_force_;
+            delete [] adr_spj_for_force_;
+            delete [] adr_ipg_for_force_;
 #ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
             delete [] req_send_;
             delete [] req_recv_;
+            delete [] status_;
 #endif
         }
         

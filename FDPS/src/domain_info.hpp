@@ -226,6 +226,7 @@ namespace ParticleSimulator{
                 pos_sample_loc_.freeMem();
                 pos_sample_tot_.resizeNoInitialize(target_number_of_sample_particle_);
                 pos_sample_loc_.reserve(target_number_of_sample_particle_);
+                pos_sample_loc_.resizeNoInitialize(number_of_sample_particle_loc_);
                 for(S32 i = 0; i < number_of_sample_particle_loc_; i++)
                     pos_sample_loc_[i] = temp_loc[i];
                 temp_loc.freeMem();

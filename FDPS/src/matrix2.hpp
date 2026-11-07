@@ -57,7 +57,7 @@ namespace ParticleSimulator{
             return Vector2<T>(xx * rhs.x + xy * rhs.y, yx * rhs.x + yy * rhs.y);
         }
         Matrix2 operator * (const Matrix2 & rhs) const {
-            return Matrix2(xx * rhs.xx + xy * rhs.yx, yx * rhs.xy + yy * rhs.yy, xx + rhs.xy + xy * rhs.yy, yx * rhs.xx + yy * rhs.yx);
+            return Matrix2(xx * rhs.xx + xy * rhs.yx, yx * rhs.xy + yy * rhs.yy, xx * rhs.xy + xy * rhs.yy, yx * rhs.xx + yy * rhs.yx);
         }
         Matrix2 operator / (const T & rhs) const {
             return Matrix2(xx / rhs, yy / rhs, xy / rhs, yx / rhs);

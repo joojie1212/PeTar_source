@@ -2115,6 +2115,9 @@ namespace ParticleSimulator{
         }
 
         TimeProfile () {
+            calc_force__core__walk_tree = calc_force__core__keep_list =
+                calc_force__core__copy_ep = calc_force__core__dispatch =
+                calc_force__core__retrieve = 0.0;
             collect_sample_particle = decompose_domain = exchange_particle = set_particle_local_tree = set_particle_global_tree = make_local_tree = make_global_tree = set_root_cell
                 = calc_force = calc_moment_local_tree = calc_moment_global_tree = make_LET_1st = make_LET_2nd 
                 = exchange_LET_1st = exchange_LET_2nd = 0.0;
@@ -2372,10 +2375,10 @@ PS_OMP_BARRIER
                                Tcopy copy){
         thread_local std::mt19937 mt(Comm::getRank()*Comm::getNumberOfThread()+Comm::getThreadNum());
         if(n_src == 0) return;
-	std::uniform_int_distribution<S32> dist(0, n_src-1);
+	std::uniform_int_distribution<S32> dist;
         ReallocatableArray<S32> record(n_dst, n_dst, MemoryAllocMode::Pool);
         for(S32 i = 0; i < n_dst; i++) {
-            S32 j = dist(mt);
+            S32 j = dist(mt, std::uniform_int_distribution<S32>::param_type(i, n_src-1));
             Tsrc hold = val_src[j];
             val_src[j]   = val_src[i];
             val_src[i]   = hold;
@@ -2400,10 +2403,10 @@ PS_OMP_BARRIER
         const auto n_dst = val_dst.size();
         thread_local std::mt19937 mt(Comm::getRank()*Comm::getNumberOfThread()+Comm::getThreadNum());
         if(n_src == 0) return;
-	std::uniform_int_distribution<S32> dist(0, n_src-1);
+	std::uniform_int_distribution<S32> dist;
         ReallocatableArray<S32> record(n_dst, n_dst, MemoryAllocMode::Pool);
         for(S32 i = 0; i < n_dst; i++) {
-            S32 j = dist(mt);
+            S32 j = dist(mt, std::uniform_int_distribution<S32>::param_type(i, n_src-1));
             Tsrc hold = val_src[j];
             val_src[j]   = val_src[i];
             val_src[i]   = hold;
@@ -2432,12 +2435,12 @@ PS_OMP_BARRIER
         thread_local std::mt19937 mt(Comm::getRank()*Comm::getNumberOfThread()+Comm::getThreadNum());
         //thread_local std::mt19937 mt(0);
         if(n_src == 0) return;
-	std::uniform_int_distribution<S32> dist(0, n_src-1);
+	std::uniform_int_distribution<S32> dist;
         ReallocatableArray<S32> record(n_dst, n_dst, MemoryAllocMode::Pool);
         Tsrc * val_src = val_src_ar.getPointer(offset_src);
         Tdst * val_dst = val_dst_ar.getPointer(offset_dst);
         for(S32 i = 0; i < n_dst; i++) {
-            S32 j = dist(mt);
+            S32 j = dist(mt, std::uniform_int_distribution<S32>::param_type(i, n_src-1));
             Tsrc hold = val_src[j];
             val_src[j]   = val_src[i];
             val_src[i]   = hold;

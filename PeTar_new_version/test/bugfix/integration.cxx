@@ -1,6 +1,7 @@
 #include "petar.hpp"
 #include <memory>
 #include <sstream>
+#include <unistd.h>
 
 FPSoft sampleParticle(int id) {
     FPSoft p;
@@ -23,12 +24,16 @@ FPSoft sampleParticle(int id) {
 void testRestartAndPrint() {
     FILE* file=tmpfile(); assert(file);
     FPSoft a=sampleParticle(1), b=sampleParticle(2), read;
+    a.merger_semi=2.; a.merger_ecc=0.25;
+    a.merger_record_time=12.; a.merger_dyn_log_tgw=0.01;
     a.writeAscii(file); b.time_merger=1777.25; b.writeAscii(file); rewind(file);
     read.readAscii(file); assert(read.id==1 && read.time_merger==976.5625);
+    assert(read.merger_semi==2. && read.merger_ecc==0.25);
+    assert(read.merger_record_time==12. && read.merger_dyn_log_tgw==0.01);
     read.readAscii(file); assert(read.id==2 && read.time_merger==1777.25);
     rewind(file);
     char line[8192]; assert(fgets(line,sizeof(line),file)); fclose(file);
-    char* suffix=strstr(line,"#BHMERGER_V1"); assert(suffix); *suffix='\0';
+    char* suffix=strstr(line,"#BHMERGER_V2"); assert(suffix); *suffix='\0';
     file=tmpfile(); fputs(line,file); fputc('\n',file); rewind(file);
     read.time_merger=99.; read.readAscii(file); assert(read.time_merger==-1.0); fclose(file);
     PtclHard h; h.DataCopy(a); h.id_cluster=17; h.adr_org=23;
@@ -39,6 +44,24 @@ void testRestartAndPrint() {
     h4.acc1[0]=4; h4.acc1[1]=5; h4.acc1[2]=6;
     std::ostringstream h4out; h4.print(h4out);
     assert(h4out.str().find("acc1=4,5,6")!=std::string::npos);
+}
+
+void testRestartClock() {
+    struct Orbit { double semi=2.,ecc=0.25,period=1.; void calcOrbit(double) {} } bin;
+    FPSoft a=sampleParticle(1),b=sampleParticle(2),r1,r2;
+    a.setBinaryPairID(2); b.setBinaryPairID(1);
+    for(FPSoft* p: {&a,&b}) {
+        p->merger_semi=bin.semi; p->merger_ecc=bin.ecc;
+        p->merger_record_time=12.; p->merger_dyn_log_tgw=0.01;
+    }
+    FILE* f=tmpfile(); assert(f);
+    a.writeAscii(f); b.writeAscii(f); rewind(f);
+    r1.readAscii(f); r2.readAscii(f); fclose(f);
+    PtclHard p1,p2; p1.DataCopy(r1); p2.DataCopy(r2);
+    ARInteraction interaction; interaction.gravitational_constant=1.;
+    interaction.checkBHMergerDynamicalChange(bin,p1,p2,13.);
+    assert(p1.time_merger==a.time_merger && p2.time_merger==b.time_merger);
+    assert(p1.merger_record_time==13. && p1.merger_dyn_log_tgw==0.01);
 }
 
 void testNeighborAndIdMap() {
@@ -60,6 +83,24 @@ void testNeighborAndIdMap() {
     assert(tree->getEpjFromId(101)==&tree->epj_sorted_[0]);
     assert(tree->getEpjFromId(202)==&tree->epj_sorted_[1]);
     assert(tree->getEpjFromId(303)==nullptr);
+    tree->tc_glb_.resizeNoInitialize(1);
+    tree->tc_glb_[0].n_ptcl_=3; tree->tc_glb_[0].adr_ptcl_=0;
+    tree->spj_sorted_.resizeNoInitialize(1);
+    tree->spj_sorted_[0].mass=7.; tree->spj_sorted_[0].pos=0.;
+    for(int i=0;i<2;++i) {
+        tree->epj_sorted_[i].mass=i+1.; tree->epj_sorted_[i].pos=0.;
+    }
+    tree->makeInteractionListLongForZeroTheta(PS::TagWithoutCutoff(),0);
+    assert(tree->epj_for_force_[0].size()==2 && tree->spj_for_force_[0].size()==1);
+    assert(tree->epj_for_force_[0][0].id==101 && tree->epj_for_force_[0][1].id==202);
+    assert(tree->spj_for_force_[0][0].mass==7.);
+    tree->tc_glb_[0].mom_.mass=10.; tree->tc_glb_[0].mom_.pos=0.;
+    std::ostringstream check;
+    PS::CheckCalcMomentLongGlobalTree(tree->epj_sorted_.getPointer(),
+        tree->spj_sorted_.getPointer(),3,tree->tc_glb_.getPointer(),
+        tree->tp_glb_.getPointer(),1e-12,check);
+    assert(check.str().find("PASS")!=std::string::npos);
+
 }
 
 void testSimdHeapBuffer() {
@@ -87,22 +128,28 @@ void testEscaperReduction() {
     for (int threads: {1,4}) {
         omp_set_num_threads(threads);
         auto p=std::make_unique<PeTar>();
-        p->system_soft.initialize(); p->system_soft.setNumberOfParticleLocal(4096);
-        p->stat.n_real_loc=4096; p->n_interrupt_glb=0;
+        p->system_soft.initialize(); p->system_soft.setNumberOfParticleLocal(256);
+        p->stat.n_real_loc=256; p->n_interrupt_glb=0;
         p->stat.pcm.pos=0.; p->stat.pcm.vel=PS::F64vec(3.,0.,0.);
         p->stat.energy.clear(); p->escaper.r_escape_sq=1.; p->escaper.check_energy_flag=false;
         p->input_parameters.write_style.value=0;
-        for(int i=0;i<4096;++i) p->system_soft[i]=sampleParticle(i+1);
+        for(int i=0;i<256;++i) {
+            p->system_soft[i]=sampleParticle(i+1);
+            p->system_soft[i].pos.x=2.+i;
+        }
         p->removeParticles();
         assert(p->stat.n_real_loc==0);
 #ifdef RECORD_CM_IN_HEADER
-        const double expected=-4096.*8.;
+        double expected=-256.*8.;
 #else
-        const double expected=-4096.*0.5;
+        double expected=-256.*0.5;
 #endif
-        assert(p->stat.energy.etot_ref==expected);
-        assert(p->stat.energy.etot_sd_ref==expected);
-        assert(p->stat.energy.de_change_cum==expected);
+        // Removing all particles also removes each pair potential once.
+        for(int d=1;d<256;++d)
+            expected+=p->input_parameters.gravitational_constant.value*(256-d)/double(d);
+        assert(std::abs(p->stat.energy.etot_ref-expected)<1e-10);
+        assert(std::abs(p->stat.energy.etot_sd_ref-expected)<1e-10);
+        assert(std::abs(p->stat.energy.de_change_cum-expected)<1e-10);
     }
 }
 
@@ -130,9 +177,40 @@ void testBSEUnitsAndMass() {
     assert(std::abs(ob.dm-(b.mt-old2))<1e-14);
 }
 
+void testOutputProtectionAndTitles() {
+    const auto dir=std::filesystem::temp_directory_path()/
+        ("petar-output-"+std::to_string(getpid()));
+    std::filesystem::create_directories(dir);
+    auto p=std::make_unique<PeTar>();
+    p->system_soft.initialize(); p->system_soft.setNumberOfParticleLocal(1);
+    p->system_soft[0]=sampleParticle(1);
+    p->stat.n_real_loc=p->stat.n_all_loc=p->stat.n_real_glb=1;
+    p->input_parameters.print_flag=false;
+    p->input_parameters.fname_snp.value=(dir/"data").string();
+    p->input_parameters.fname_inp.value=(dir/"alias").string();
+    { std::ofstream f(dir/"data.0"); f<<"original snapshot\n"; }
+    std::filesystem::create_hard_link(dir/"data.0",dir/"alias");
+    p->fstatus.open(dir/"status");
+    p->input_parameters.write_style.value=1; p->file_header.nfile=-1;
+    p->output(true);
+    std::ifstream original(dir/"data.0"); std::string line;
+    std::getline(original,line); assert(line=="original snapshot");
+    p->output(); assert(std::filesystem::exists(dir/"data.1"));
+    p->fstatus.close(); p->fstatus.open(dir/"columns");
+    p->input_parameters.write_style.value=2; p->output(); p->fstatus.close();
+    std::ofstream expected(dir/"expected");
+    p->stat.printColumnTitle(expected, WRITE_WIDTH);
+    p->system_soft[0].printColumnTitle(expected, WRITE_WIDTH);
+    std::ifstream columns(dir/"columns"); std::getline(columns,line);
+    expected.close();
+    std::ifstream expected_file(dir/"expected"); std::string expected_line;
+    std::getline(expected_file,expected_line); assert(line==expected_line);
+    p.reset(); std::filesystem::remove_all(dir);
+}
+
 int main(int argc,char** argv) {
     PeTar::initialFDPS(argc,argv); omp_set_num_threads(4);
-    testRestartAndPrint(); testNeighborAndIdMap(); testSimdHeapBuffer();
-    testEscaperReduction(); testBSEUnitsAndMass();
+    testRestartAndPrint(); testRestartClock(); testNeighborAndIdMap(); testSimdHeapBuffer();
+    testEscaperReduction(); testBSEUnitsAndMass(); testOutputProtectionAndTitles();
     PeTar::finalizeFDPS(); std::cout<<"integration regressions passed\n";
 }

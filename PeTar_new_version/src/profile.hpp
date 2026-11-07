@@ -189,8 +189,9 @@ struct Tprofile{
     }
 
     void end(){
-        tbar += PS::GetWtime();
-        time += PS::GetWtime();
+        const PS::F64 now = PS::GetWtime();
+        tbar += now;
+        time += now;
     }
     
     void print(std::ostream & fout, const PS::S32 divider=1){
@@ -206,11 +207,11 @@ struct Tprofile{
     }
 
     PS::F64 getMax() {
-        return PS::Comm::getMaxValue(time-tbar);
+        return PS::Comm::getMaxValue(time);
     }
 
     PS::F64 getMin() {
-        return PS::Comm::getMinValue(time-tbar);
+        return PS::Comm::getMinValue(time);
     }
 
     void dumpName(std::ostream & fout, const PS::S32 width=PROFILE_PRINT_WIDTH) const {
@@ -334,6 +335,30 @@ public:
     Tprofile status;
     Tprofile other;
     const PS::S32 n_profile;
+    static constexpr Tprofile SysProfile::* profiles[] = {
+        &SysProfile::total,
+        &SysProfile::hard_single,
+        &SysProfile::hard_isolated,
+        &SysProfile::hard_connected,
+        &SysProfile::hard_interrupt,
+        &SysProfile::tree_nb,
+        &SysProfile::tree_soft,
+#ifdef DARKMATTER
+        &SysProfile::dm_force,
+        &SysProfile::dm_source_tree,
+        &SysProfile::star_dm_tree,
+#endif
+        &SysProfile::force_correct,
+        &SysProfile::kick,
+        &SysProfile::search_cluster,
+        &SysProfile::create_group,
+        &SysProfile::domain,
+        &SysProfile::exchange,
+        &SysProfile::output,
+        &SysProfile::status,
+        &SysProfile::other,
+    };
+
     
     SysProfile(): total         (Tprofile("Total      ")),
                   hard_single   (Tprofile("PP_single  ")),
@@ -366,7 +391,7 @@ public:
         fout<<"Time: "<<time_sys<<std::endl;
         
         for(PS::S32 i=0; i<n_profile; i++) {
-            Tprofile* iptr = (Tprofile*)this+i;
+            auto* iptr = &(this->*profiles[i]);
             iptr->print(fout, n_loop);
         }
     }
@@ -374,28 +399,28 @@ public:
     
     void dump(std::ostream & fout, const PS::S64 n_loop=1, const PS::S32 width=PROFILE_PRINT_WIDTH) const {
         for(PS::S32 i=0; i<n_profile; i++) {
-            Tprofile* iptr = (Tprofile*)this+i;
+            auto* iptr = &(this->*profiles[i]);
             iptr->dump(fout, n_loop, width);
         }
     }
 
     void dumpName(std::ostream & fout, const PS::S32 width=PROFILE_PRINT_WIDTH) const {
         for(PS::S32 i=0; i<n_profile; i++) {
-            Tprofile* iptr = (Tprofile*)this+i;
+            auto* iptr = &(this->*profiles[i]);
             iptr->dumpName(fout, width);
         }
     }
 
     void dumpBarrier(std::ostream & fout, const PS::S64 n_loop=1, const PS::S32 width=PROFILE_PRINT_WIDTH) const {
         for(PS::S32 i=0; i<n_profile; i++) {
-            Tprofile* iptr = (Tprofile*)this+i;
+            auto* iptr = &(this->*profiles[i]);
             iptr->dumpBarrier(fout, n_loop, width);
         }
     }
 
     void dumpBarrierName(std::ostream & fout, const PS::S32 width=PROFILE_PRINT_WIDTH) const {
         for(PS::S32 i=0; i<n_profile; i++) {
-            Tprofile* iptr = (Tprofile*)this+i;
+            auto* iptr = &(this->*profiles[i]);
             iptr->dumpBarrierName(fout, width);
         }
     }
@@ -403,9 +428,10 @@ public:
     SysProfile getMax() {
         SysProfile pmax;
         for(PS::S32 i=0; i<n_profile; i++) {
-            Tprofile* iptr = (Tprofile*)this+i;
-            Tprofile* pptr = (Tprofile*)&pmax+i;
+            auto* iptr = &(this->*profiles[i]);
+            auto* pptr = &(pmax.*profiles[i]);
             pptr->time = iptr->getMax();
+            pptr->tbar = PS::Comm::getMaxValue(iptr->tbar);
         }
         return pmax;
     }
@@ -413,16 +439,17 @@ public:
     SysProfile getMin() {
         SysProfile pmin;
         for(PS::S32 i=0; i<n_profile; i++) {
-            Tprofile* iptr = (Tprofile*)this+i;
-            Tprofile* pptr = (Tprofile*)&pmin+i;
+            auto* iptr = &(this->*profiles[i]);
+            auto* pptr = &(pmin.*profiles[i]);
             pptr->time = iptr->getMin();
+            pptr->tbar = PS::Comm::getMinValue(iptr->tbar);
         }
         return pmin;
     }
 
     void clear(){
         for(PS::S32 i=0; i<n_profile; i++) {
-            Tprofile* iptr = (Tprofile*)this+i;
+            auto* iptr = &(this->*profiles[i]);
             iptr->reset();
         }
     }
@@ -447,6 +474,23 @@ public:
     NumCounter ep_sp_interact;
     //NumCounter ARC_step_group;
     const PS::S32 n_counter;
+    static constexpr NumCounter SysCounts::* counters[] = {
+        &SysCounts::hard_single,
+        &SysCounts::hard_isolated,
+        &SysCounts::hard_connected,
+        &SysCounts::hard_interrupt,
+        &SysCounts::cluster_isolated,
+        &SysCounts::cluster_connected,
+        &SysCounts::ARC_substep_sum,
+        &SysCounts::ARC_tsyn_step_sum,
+        &SysCounts::ARC_n_groups,
+        &SysCounts::ARC_n_groups_iso,
+        &SysCounts::H4_step_sum,
+        &SysCounts::n_neighbor_zero,
+        &SysCounts::ep_ep_interact,
+        &SysCounts::ep_sp_interact,
+    };
+
     std::map<PS::S32,PS::S32> n_cluster; ///<Histogram of number of particles in clusters
 
     SysCounts(): hard_single      (NumCounter("PP_single  ")),
@@ -507,7 +551,7 @@ public:
 
     //void dump(std::ofstream & fout, const PS::S32 width=PROFILE_PRINT_WIDTH, const PS::S64 n_loop=1){
     //    for(PS::S32 i=0; i<n_counter; i++) {
-    //        NumCounter* iptr = (NumCounter*)this+i;
+    //        auto* iptr = &(this->*counters[i]);
     //        iptr->dump(fout, width, n_loop);
     //    }
     //}
@@ -519,14 +563,14 @@ public:
     // 
     //void dumpName(std::ofstream & fout, const PS::S32 width=PROFILE_PRINT_WIDTH) {
     //    for(PS::S32 i=0; i<n_counter; i++) {
-    //        NumCounter* iptr = (NumCounter*)this+i;
+    //        auto* iptr = &(this->*counters[i]);
     //        iptr->dumpName(fout, width);
     //    }
     //}
     
     void dump(std::ostream & fout, const PS::S64 n_loop=1, const PS::S32 width=PROFILE_PRINT_WIDTH) const{
         for(PS::S32 i=0; i<n_counter; i++) {
-            NumCounter* iptr = (NumCounter*)this+i;
+            auto* iptr = &(this->*counters[i]);
             iptr->dump(fout, n_loop, width);
         }
     }
@@ -539,14 +583,14 @@ public:
 
     void dumpName(std::ostream & fout, const PS::S32 width=PROFILE_PRINT_WIDTH) const{
         for(PS::S32 i=0; i<n_counter; i++) {
-            NumCounter* iptr = (NumCounter*)this+i;
+            auto* iptr = &(this->*counters[i]);
             iptr->dumpName(fout, width);
         }
     }
     
     void clear() {
         for(PS::S32 i=0; i<n_counter; i++) {
-            NumCounter* iptr = (NumCounter*)this+i;
+            auto* iptr = &(this->*counters[i]);
             *iptr = 0;
         }
         n_cluster.clear();

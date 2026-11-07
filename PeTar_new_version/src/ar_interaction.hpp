@@ -81,6 +81,7 @@ public:
         p1.merger_semi = p2.merger_semi = -1.0;
         p1.merger_ecc = p2.merger_ecc = -1.0;
         p1.merger_record_time = p2.merger_record_time = -1.0;
+        p1.merger_dyn_log_tgw = p2.merger_dyn_log_tgw = 0.0;
     }
 
     template<class Tbinary>
@@ -90,6 +91,7 @@ public:
             && p1.getBinaryPairID()==p2.id && p2.getBinaryPairID()==p1.id
             && p1.time_merger>=0.0 && p2.time_merger>=0.0
             && p1.merger_record_time>=0.0 && p2.merger_record_time>=0.0;
+        const Float dynamics_log_ratio = p1.merger_dyn_log_tgw;
         const Float old_a = p1.merger_semi;
         const Float old_e = p1.merger_ecc;
         const Float old_time = p1.merger_record_time;
@@ -99,7 +101,7 @@ public:
             || !std::isfinite(bin.semi) || !std::isfinite(bin.ecc)) {
             if (log_change)
                 change_output.writeChange(old_time, now, p1, p2,
-                    old_a, old_e, bin.semi, bin.ecc, old_deadline, -1.0);
+                    old_a, old_e, bin.semi, bin.ecc, old_deadline, -1.0, dynamics_log_ratio);
             clearBHMergerPrediction(p1, p2);
             return;
         }
@@ -115,9 +117,35 @@ public:
         p1.merger_record_time = p2.merger_record_time = now;
         if (log_change)
             change_output.writeChange(old_time, now, p1, p2,
-                old_a, old_e, bin.semi, bin.ecc, old_deadline, deadline);
+                old_a, old_e, bin.semi, bin.ecc, old_deadline, deadline, dynamics_log_ratio);
+        p1.merger_dyn_log_tgw = p2.merger_dyn_log_tgw = 0.0;
         p1.setBinaryPairID(p2.id);
         p2.setBinaryPairID(p1.id);
+    }
+
+    static bool validBHMergerOrbit(const Float a, const Float e) {
+        return std::isfinite(a) && std::isfinite(e) && a>0.0 && e>=0.0 && e<1.0;
+    }
+
+    static Float bhMergerLogLifetimeShape(const Float a, const Float e) {
+        // Full Peters factor, evaluated in log space even at very high e.
+        const Float log_f = e>PetersMergerTime::eccentricity_switch
+            ? std::log(768.0/425.0)+3.5*(std::log1p(-e)+std::log1p(e))
+            : std::log(PetersMergerTime::eccentricityFactor(e));
+        return 4.0*std::log(a)+log_f;
+    }
+
+    static bool significantBHMergerDynamics(const Float delta) {
+        return !std::isfinite(delta) || delta<std::log(0.9) || delta>std::log(1.1);
+    }
+
+    template<class Tbinary>
+    Float bhMergerDynamicalIncrement(const Tbinary& bin, const PtclHard& p) const {
+        if (!validBHMergerOrbit(bin.semi,bin.ecc)
+            || !validBHMergerOrbit(p.merger_semi,p.merger_ecc))
+            return std::numeric_limits<Float>::quiet_NaN();
+        return bhMergerLogLifetimeShape(bin.semi,bin.ecc)
+            - bhMergerLogLifetimeShape(p.merger_semi,p.merger_ecc);
     }
 
     template<class Tbinary>
@@ -125,33 +153,58 @@ public:
                                          const PtclHard& p1,
                                          const PtclHard& p2) const {
         if (!(p1.merger_semi>0.0 && p2.merger_semi>0.0)) return false;
-        const Float saved_a = 0.5*(p1.merger_semi+p2.merger_semi);
-        const Float saved_e = 0.5*(p1.merger_ecc+p2.merger_ecc);
-        if (!(bin.semi>0.0 && bin.ecc>=0.0 && bin.ecc<1.0)
-            || !(saved_a>0.0 && saved_e>=0.0 && saved_e<1.0)
-            || !std::isfinite(bin.semi) || !std::isfinite(bin.ecc)
-            || !std::isfinite(saved_a) || !std::isfinite(saved_e))
-            return true;
-
-        // Compare the dominant logarithmic Peters-lifetime scaling instead of
-        // imposing a fixed |delta e| threshold.  Near e=1, even a tiny physical
-        // eccentricity change can alter the inspiral time enormously, whereas the
-        // polynomial Peters correction remains finite and is sub-dominant:
-        //     log(t_GW) ~= 4 log(a) + (7/2) log(1-e^2) + constant.
-        // log1p keeps the eccentricity term accurate for highly eccentric orbits.
-        // The full Peters expression is still used when a new deadline is set.
-        const Float delta_log_tgw =
-            4.0*(std::log(bin.semi)-std::log(saved_a))
-            + 3.5*(std::log1p(-bin.ecc*bin.ecc)
-                   - std::log1p(-saved_e*saved_e));
-
-        // Ignore small osculating-orbit and integration noise.  Refresh the
-        // deadline only when the dominant predicted lifetime becomes at least
-        // 10% shorter or 10% longer than the saved prediction.
-        return !std::isfinite(delta_log_tgw)
-            || delta_log_tgw < std::log(0.9)
-            || delta_log_tgw > std::log(1.1);
+        return significantBHMergerDynamics(p1.merger_dyn_log_tgw
+                                           + bhMergerDynamicalIncrement(bin,p1));
     }
+
+    template<class Tbinary>
+    void saveBHMergerDynamicalCheckpoint(const Tbinary& bin, PtclHard& p1,
+                                         PtclHard& p2, const Float now) const {
+        p1.merger_semi = p2.merger_semi = bin.semi;
+        p1.merger_ecc = p2.merger_ecc = bin.ecc;
+        p1.merger_record_time = p2.merger_record_time = now;
+    }
+
+    // Call only on the gravitationally integrated state, BEFORE an internal
+    // BSE/tidal modification. Subthreshold changes survive internal updates.
+    template<class Tbinary>
+    void checkBHMergerDynamicalChange(Tbinary& bin, PtclHard& p1, PtclHard& p2,
+                                      const Float now) const {
+        bin.calcOrbit(gravitational_constant);
+        if (p1.getBinaryPairID()!=p2.id || p2.getBinaryPairID()!=p1.id
+            || p1.time_merger<0.0 || p2.time_merger<0.0
+            || p1.merger_record_time<0.0 || p2.merger_record_time<0.0) {
+            refreshBHMergerPrediction(bin,p1,p2,now);
+            return;
+        }
+        p1.merger_dyn_log_tgw += bhMergerDynamicalIncrement(bin,p1);
+        p2.merger_dyn_log_tgw = p1.merger_dyn_log_tgw;
+        if (significantBHMergerDynamics(p1.merger_dyn_log_tgw))
+            refreshBHMergerPrediction(bin,p1,p2,now,true);
+        else
+            saveBHMergerDynamicalCheckpoint(bin,p1,p2,now);
+    }
+
+    // No change record is emitted here. Pure GW evolution preserves the
+    // absolute clock, even after its deadline; it cannot postpone merger.
+    // A new pair, mass/type change or capture needs a new physical prediction.
+    template<class Tbinary>
+    void syncBHMergerInternalChange(Tbinary& bin, PtclHard& p1, PtclHard& p2,
+                                    const Float now, const bool reset_clock=false) const {
+        bin.calcOrbit(gravitational_constant);
+        if (p1.mass<=0.0 || p2.mass<=0.0
+            || !validBHMergerOrbit(bin.semi,bin.ecc)) {
+            clearBHMergerPrediction(p1,p2);
+            return;
+        }
+        if (reset_clock || p1.getBinaryPairID()!=p2.id || p2.getBinaryPairID()!=p1.id
+            || p1.time_merger<0.0 || p2.time_merger<0.0) {
+            refreshBHMergerPrediction(bin,p1,p2,now);
+            return;
+        }
+        saveBHMergerDynamicalCheckpoint(bin,p1,p2,now);
+    }
+
 #endif
 
     //! (Necessary) check whether publicly initialized parameters are correctly set
@@ -657,7 +710,7 @@ public:
     Float calcPertFromForce(const Float* _force, const Float _mp, const Float _mpert) {
         Float force2 = _force[0]*_force[0]+_force[1]*_force[1]+_force[2]*_force[2];
 #ifdef AR_SLOWDOWN_PERT_R4
-        return force2/(gravitational_constant*_mp*_mpert);
+        return force2/(gravitational_constant*gravitational_constant*_mp*_mpert);
 #else
         Float force = sqrt(force2)/gravitational_constant;
         return sqrt(force/(_mp*_mpert))*force;
@@ -1302,6 +1355,16 @@ public:
                 }
 
                 if (check_flag) {
+#ifdef BHMERGER
+                    if (p1->mass>0.0 && p2->mass>0.0
+                        && p1->star.kw>=10 && p1->star.kw<15
+                        && p2->star.kw>=10 && p2->star.kw<15)
+                        checkBHMergerDynamicalChange(_bin,*p1,*p2,_bin_interrupt.time_now);
+                    const Float mass1_before_bse = p1->mass;
+                    const Float mass2_before_bse = p2->mass;
+                    const int type1_before_bse = p1->star.kw;
+                    const int type2_before_bse = p2->star.kw;
+#endif
 #ifdef FROZEN_BINARY
                     thawFrozenPair(*p1, *p2, _bin_interrupt.time_now, "bse_update");
 #endif
@@ -1329,8 +1392,6 @@ public:
                     //std::cout << "stellar:"<<ecc <<std::endl;
                     //Float ecc_bk = ecc;
                     Float semi = _bin.semi;
-                    const Float semi_before_bse = semi;
-                    const Float ecc_before_bse = ecc;
                     //Float semi_bk =semi;
                     Float mtot = p1->mass+p2->mass;
                     Float period = _bin.period;
@@ -1439,30 +1500,9 @@ public:
                         p2->star = p2_star_bk;
 #ifdef BHMERGER
                         if (bh_bh_merger_managed) {
-                            const bool members_changed =
-                                p1->getBinaryPairID() != p2->id
-                                || p2->getBinaryPairID() != p1->id;
-                            const bool prediction_missing =
-                                p1->time_merger < 0.0
-                                || p2->time_merger < 0.0;
-                            const bool clearly_perturbed =
-                                isBHMergerOrbitClearlyPerturbed(
-                                    _bin, *p1, *p2);
-
-                            // BSE may report Roche/contact/coalescence repeatedly
-                            // for the same compact BH-BH orbit.  Replacing the
-                            // Peters deadline on every such callback would move it
-                            // forward by one fresh lifetime forever.  Preserve the
-                            // accumulated inspiral clock unless the members changed,
-                            // no prediction exists, or dynamics materially changed
-                            // the osculating orbit.  A real strong encounter can
-                            // therefore advance or delay the merger, while repeated
-                            // BSE terminal-event notifications cannot postpone it.
-                            if (members_changed || prediction_missing
-                                || clearly_perturbed)
-                                refreshBHMergerPrediction(
-                                    _bin, *p1, *p2,
-                                    _bin_interrupt.time_now, clearly_perturbed);
+                            // This BSE proposal was rejected; particles retain
+                            // the pre-BSE state and its already checked clock.
+                            syncBHMergerInternalChange(_bin,*p1,*p2,_bin_interrupt.time_now);
                             const Float next_bh_check =
                                 std::max(_bin_interrupt.time_now,
                                          std::max(p1->time_merger,
@@ -1542,22 +1582,17 @@ public:
                     //std::cout<<"postProcess1"<<std::endl;
                     postProcess(out, pos_cm, vel_cm, semi, ecc, binary_type_final);
 #ifdef BHMERGER
-                    // Refresh only when BSE really changed the orbit.  In
-                    // particular, an ordinary callback that merely reached this
-                    // code with unchanged a/e must leave the saved deadline alone.
-                    const bool bh_pair_after_bse = p1->mass>0.0 && p2->mass>0.0
+                    const bool compact_pair_after_bse = p1->mass>0.0 && p2->mass>0.0
                         && p1->star.kw>=10 && p1->star.kw<15
                         && p2->star.kw>=10 && p2->star.kw<15;
-                    // Use the same material-change threshold as the perturbation
-                    // path. Small BSE roundoff/noise must not churn the deadline.
-                    const bool bse_orbit_updated =
-                        semi_before_bse>0.0
-                        && (std::fabs(semi-semi_before_bse)
-                                > 1.0e-3*std::fabs(semi_before_bse)
-                            || std::fabs(ecc-ecc_before_bse)>1.0e-3);
-                    if (bh_pair_after_bse && bse_orbit_updated)
-                        refreshBHMergerPrediction(_bin, *p1, *p2,
-                                                  _bin_interrupt.time_now);
+                    if (compact_pair_after_bse) {
+                        const bool changed_members = p1->mass!=mass1_before_bse
+                            || p2->mass!=mass2_before_bse
+                            || p1->star.kw!=type1_before_bse || p2->star.kw!=type2_before_bse;
+                        syncBHMergerInternalChange(_bin,*p1,*p2,
+                                                  _bin_interrupt.time_now,changed_members);
+                    }
+                    else clearBHMergerPrediction(*p1,*p2);
 #endif
                     }
                 }
@@ -1874,8 +1909,6 @@ public:
                 if(p1->mass>0 && p2->mass>0&&p1->star.kw>=10&&p1->star.kw<15&&p2->star.kw>=10&&p2->star.kw<15){
                     int binary_type_p1 = static_cast<int>(p1->getBinaryInterruptState());
                     int binary_type_p2 = static_cast<int>(p2->getBinaryInterruptState());
-                    long long int pair_id1 = p1->getBinaryPairID();
-                    long long int pair_id2 = p2->getBinaryPairID();
                     bool BHmerger_flag = false;
                     bool BHmergersys_flag=true;
                     if (binary_type_p1 != binary_type_p2) BHmergersys_flag = false;
@@ -1887,18 +1920,7 @@ public:
                             BHmergersys_flag = false;
                     if(BHmergersys_flag)
                     {
-                        const bool members_changed = pair_id1 != p2->id
-                                                  || pair_id2 != p1->id;
-                        const bool prediction_missing = p1->time_merger<0.0
-                                                     || p2->time_merger<0.0;
-                        const bool clearly_perturbed =
-                            isBHMergerOrbitClearlyPerturbed(_bin, *p1, *p2);
-                        // Prediction is intentionally outside the critical region.
-                        // Replacing the deadline (rather than taking min) preserves
-                        // the physical possibility that a perturbation delays merger.
-                        if (members_changed || prediction_missing || clearly_perturbed)
-                            refreshBHMergerPrediction(_bin, *p1, *p2,
-                                                      _bin_interrupt.time_now, clearly_perturbed);
+                        checkBHMergerDynamicalChange(_bin,*p1,*p2,_bin_interrupt.time_now);
                         BHmerger_flag = p1->time_merger>=0.0
                                      && p2->time_merger>=0.0
                                      && std::max(p1->time_merger,p2->time_merger)
@@ -2017,6 +2039,15 @@ public:
                                 p2->setBinaryPairID(p1->id);
                                 p1->setBinaryInterruptState(BinaryInterruptState::tide);
                                 p2->setBinaryInterruptState(BinaryInterruptState::tide);
+#ifdef BHMERGER
+                                // Hyperbolic GW capture is internal dissipation,
+                                // not a third-body perturbation. Establish its
+                                // bound clock silently; never leak it into change.
+                                if (p1->star.kw>=10 && p1->star.kw<15
+                                    && p2->star.kw>=10 && p2->star.kw<15)
+                                    syncBHMergerInternalChange(_bin,*p1,*p2,
+                                                              _bin_interrupt.time_now,true);
+#endif
 
                                 modify_return = 2;
 

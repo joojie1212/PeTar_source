@@ -522,7 +522,7 @@ public:
 #ifdef CLUSTER_DEBUG
                     assert(n_ngb_check>=0);
 #endif
-                    sys[i].n_ngb = n_ngb_check;
+                    sys[i].n_ngb = n_ngb_check + 1; // force/output convention includes self
 
                     // no neighbor
                     if (n_ngb_check==0) {

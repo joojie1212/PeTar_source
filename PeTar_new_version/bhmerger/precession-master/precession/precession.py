@@ -1,5 +1,14 @@
 import warnings
 import numpy as np
+
+def _arccos_roundoff(value):
+    """Clip only floating-point roundoff at the real arccos endpoints."""
+    value = np.asarray(value, dtype=float)
+    tolerance = 32 * np.finfo(float).eps
+    if np.any(~np.isfinite(value)) or np.any(np.abs(value) > 1 + tolerance):
+        raise ValueError("arccos argument outside the physical interval")
+    return np.arccos(np.clip(value, -1.0, 1.0))
+
 import scipy.special
 import scipy.integrate
 import scipy.spatial.transform
@@ -188,7 +197,7 @@ def rotate_nested(vec, align_zaxis, align_xzplane):
     
     align_zaxis = normalize_nested(align_zaxis)
     
-    angle1 = np.arccos(align_zaxis[:,2])
+    angle1 = _arccos_roundoff(align_zaxis[:,2])
     vec1 = np.cross(align_zaxis,[0,0,1])
     vec1 = normalize_nested(vec1)
     r1 = scipy.spatial.transform.Rotation.from_rotvec(angle1[:,None] * vec1)
@@ -197,7 +206,7 @@ def rotate_nested(vec, align_zaxis, align_xzplane):
     align_xzplane[:,2]=0
     align_xzplane = normalize_nested(align_xzplane)
 
-    angle2= -np.sign(align_xzplane[:,1])*np.arccos(align_xzplane[:,0])
+    angle2= -np.sign(align_xzplane[:,1])*_arccos_roundoff(align_xzplane[:,0])
 
     vec2 = np.array([0,0,1])
     r2 = scipy.spatial.transform.Rotation.from_rotvec(angle2[:,None] * vec2)
@@ -250,8 +259,8 @@ def isotropic_angles(N=1):
     ``vec = precession.isotropic_angles(N=1)``
     """
 
-    theta1=np.arccos(np.random.uniform(-1,1,N))
-    theta2=np.arccos(np.random.uniform(-1,1,N))
+    theta1=_arccos_roundoff(np.random.uniform(-1,1,N))
+    theta2=_arccos_roundoff(np.random.uniform(-1,1,N))
     deltaphi=np.random.uniform(-np.pi,np.pi,N)
 
     return np.stack([theta1,theta2,deltaphi])
@@ -535,7 +544,7 @@ def eval_q(m1, m2):
     m1 = np.atleast_1d(m1).astype(float)
     m2 = np.atleast_1d(m2).astype(float)
     q = m2/m1
-    assert (q < 1).all(), "The convention used in this code is q=m2/m1<1."
+    assert ((q > 0) & (q <= 1)).all(), "The convention used in this code is 0<q=m2/m1<=1."
 
     return q
 
@@ -971,7 +980,7 @@ def eval_theta1(deltachi, chieff, q, chi1):
     """
 
     costheta1 = eval_costheta1(deltachi, chieff, q, chi1)
-    theta1 = np.arccos(costheta1)
+    theta1 = _arccos_roundoff(costheta1)
 
     return theta1
 
@@ -1037,7 +1046,7 @@ def eval_theta2(deltachi, chieff, q, chi2):
     """
 
     costheta2 = eval_costheta2(deltachi, chieff, q, chi2)
-    theta2 = np.arccos(costheta2)
+    theta2 = _arccos_roundoff(costheta2)
 
     return theta2
 
@@ -1143,7 +1152,7 @@ def eval_theta12(theta1=None, theta2=None, deltaphi=None, deltachi=None, kappa=N
     """
 
     costheta12 = eval_costheta12(theta1=theta1, theta2=theta2, deltaphi=deltaphi, deltachi=deltachi, kappa=kappa, chieff=chieff, q=q, chi1=chi1, chi2=chi2)
-    theta12 = np.arccos(costheta12)
+    theta12 = _arccos_roundoff(costheta12)
 
     return theta12
 
@@ -1246,7 +1255,7 @@ def eval_deltaphi(deltachi, kappa, r, chieff, q, chi1, chi2, cyclesign=1):
     # Roundoff becomes strongly amplified when either spin is nearly zero:
     # eval_cosdeltaphi can then miss the physical interval by ~1e-3 even for
     # otherwise valid configurations. Keep arccos on its physical domain.
-    deltaphi = np.sign(cyclesign)*np.arccos(np.clip(cosdeltaphi, -1.0, 1.0))
+    deltaphi = np.sign(cyclesign)*_arccos_roundoff(cosdeltaphi)
 
     return deltaphi
 
@@ -1319,7 +1328,7 @@ def eval_thetaL(deltachi, kappa, r, chieff, q):
     """
 
     costhetaL = eval_costhetaL(deltachi, kappa, r,chieff, q)
-    thetaL = np.arccos(costhetaL)
+    thetaL = _arccos_roundoff(costhetaL)
 
     return thetaL
 
@@ -1438,7 +1447,7 @@ def eval_kappa(theta1=None, theta2=None, deltaphi=None, J=None, r=None, q=None, 
                 (chi1**2 + q**4 *chi2**2 + 2*chi1*chi2*q**2 * (np.cos(theta1)*np.cos(theta2) + np.cos(deltaphi)*np.sin(theta1)*np.sin(theta2))) / (2*q*(1+q)**2*r**(1/2))
 
     else:
-        TypeError("Please provide provide either (theta1,theta2,deltaphi,r,q,chi1,chhi2) or (J,r,q).")
+        raise TypeError("Please provide provide either (theta1,theta2,deltaphi,r,q,chi1,chhi2) or (J,r,q).")
 
     return kappa
 
@@ -1476,7 +1485,7 @@ def eval_S(theta1=None, theta2=None, deltaphi=None, deltachi=None, kappa=None, r
 
         S = (S1**2 + S2**2 + 2*S1*S2*(np.sin(theta1)*np.sin(theta2)*np.cos(deltaphi)+np.cos(theta1)*np.cos(theta2)))**0.5
 
-    if theta1 is None and theta2 is None and deltaphi is None and deltachi is not None and kappa is not None and r is not None and chieff is not None and q is not None and chi1 is None and chi2 is None:
+    elif theta1 is None and theta2 is None and deltaphi is None and deltachi is not None and kappa is not None and r is not None and chieff is not None and q is not None and chi1 is None and chi2 is None:
 
         deltachi = np.atleast_1d(deltachi).astype(float)
         kappa = np.atleast_1d(kappa).astype(float)
@@ -1487,7 +1496,7 @@ def eval_S(theta1=None, theta2=None, deltaphi=None, deltachi=None, kappa=None, r
         S = ( q /(1+q)**2 * r**(1/2) * (2*kappa - chieff - deltachi * (1 - q)/(1 + q)) )**(1/2)
 
     else:
-        TypeError("Please provide provide either (theta1,theta2,deltaphi,r,q,chi1,chhi2) or (J,r,q).")
+        raise TypeError("Please provide provide either (theta1,theta2,deltaphi,r,q,chi1,chhi2) or (J,r,q).")
 
 
     return S
@@ -1683,12 +1692,12 @@ def vectors_to_angles(Lvec, S1vec, S2vec):
     S2vec = normalize_nested(S2vec)
     Lvec = normalize_nested(Lvec)
 
-    theta1 = np.arccos(dot_nested(S1vec, Lvec))
-    theta2 = np.arccos(dot_nested(S2vec, Lvec))
+    theta1 = _arccos_roundoff(dot_nested(S1vec, Lvec))
+    theta2 = _arccos_roundoff(dot_nested(S2vec, Lvec))
     S1crL = np.cross(S1vec, Lvec)
     S2crL = np.cross(S2vec, Lvec)
 
-    absdeltaphi = np.arccos(dot_nested(normalize_nested(S1crL), normalize_nested(S2crL)))
+    absdeltaphi = _arccos_roundoff(dot_nested(normalize_nested(S1crL), normalize_nested(S2crL)))
     cyclesign = eval_cyclesign(Lvec=Lvec, S1vec=S1vec, S2vec=S2vec)
     deltaphi = absdeltaphi*cyclesign
 
@@ -2657,10 +2666,10 @@ def kappalimits(r=None, chieff=None, q=None, chi1=None, chi2=None, enforce=False
     
     Returns
     -------
-    kappamax: float
-        Maximum value of the asymptotic angular momentum kappa.
     kappamin: float
         Minimum value of the asymptotic angular momentum kappa.
+    kappamax: float
+        Maximum value of the asymptotic angular momentum kappa.
     
     Examples
     --------
@@ -2753,7 +2762,7 @@ def deltachilimits_definition(q, chi1, chi2):
     q = np.atleast_1d(q).astype(float)
     chi1 = np.atleast_1d(chi1).astype(float)
     chi2 = np.atleast_1d(chi2).astype(float)
-    deltachilim = np.abs((chi1-q*chi2)/(1+q))
+    deltachilim = (chi1+q*chi2)/(1+q)
 
     return np.stack([-deltachilim, deltachilim])
 
@@ -2964,12 +2973,12 @@ def deltachiroots(kappa, u, chieff, q, chi1, chi2, full_output=True, precomputed
     
     Returns
     -------
-    deltachi3: float, optional
-        Spurious root of the deltachi evolution.
     deltachiminus: float
         Lowest physical root of the deltachi evolution.
     deltachiplus: float
-        Lowest physical root of the deltachi evolution.
+        Highest physical root of the deltachi evolution.
+    deltachi3: float, optional
+        Spurious root, returned only when full_output=True.
     
     Examples
     --------
@@ -3114,10 +3123,10 @@ def deltachilimits(kappa=None, r=None, chieff=None, q=None, chi1=None, chi2=None
     
     Returns
     -------
-    deltachimax: float
-        Maximum value of the weighted spin difference.
     deltachimin: float
         Minimum value of the weighted spin difference.
+    deltachimax: float
+        Maximum value of the weighted spin difference.
     
     Examples
     --------
@@ -3323,12 +3332,17 @@ def deltachitildeav2(m,tol=1e-7):
     """
 
     m = np.atleast_1d(m).astype(float)
-    # The limit of the Ssav coefficient as m->0 is finite and equal to 1/2.
-    # This is implementation is numerically stable up to m~1e-10.
-    # For m=1e-7, the analytic m=0 limit is returned with a precision of 1e-9, which is enough.
-    m = np.minimum(np.maximum(tol, m),1-tol)
-
-    coeff = (2+m-2*(1+m)*scipy.special.ellipe(m)/scipy.special.ellipk(m)) / (3*m**2)
+    # Retain the upper-end regularization; evaluate the true m=0 limit.
+    m = np.minimum(np.maximum(0., m), 1-tol)
+    coeff = np.empty_like(m)
+    small = m <= 0.01
+    x = m[small]
+    # Expansion of (2+m-2*(1+m)*E(m)/K(m))/(3*m**2).
+    coeff[small] = 3/8 + x*(1/16 + x*(35/1024 + x*(47/2048
+                    + x*(557/32768 + x*875/65536))))
+    x = m[~small]
+    coeff[~small] = (2+x-2*(1+x)*scipy.special.ellipe(x)
+                    / scipy.special.ellipk(x))/(3*x**2)
 
     return coeff
 
@@ -4534,8 +4548,8 @@ def updown_endpoint(q, chi1, chi2):
     
     costhetaupdown = (chi1 - q * chi2) / (chi1 + q * chi2)
 
-    theta1 = np.arccos(costhetaupdown)
-    theta2 = np.arccos(costhetaupdown)
+    theta1 = _arccos_roundoff(costhetaupdown)
+    theta2 = _arccos_roundoff(costhetaupdown)
     deltaphi = np.zeros(len(theta1))
 
     return np.stack([theta1, theta2, deltaphi])
@@ -4584,7 +4598,7 @@ def angleresonances_endpoint(q, chi1, chi2, chieff):
     chieff_uu = eval_chieff(0, 0, q, chi1, chi2)
     chieff_ud = eval_chieff(0, -np.pi, q, chi1, chi2)
     
-    thetakappaplus = np.arccos(chieff / chieff_uu)
+    thetakappaplus = _arccos_roundoff(chieff / chieff_uu)
     deltaphikappaplus = np.zeros_like(thetakappaplus)
     
     
@@ -4592,11 +4606,11 @@ def angleresonances_endpoint(q, chi1, chi2, chieff):
     costheta1kappaminus_less = chieff / chieff_ud
     costheta1kappaminus_gtr = (1+q) * (chieff**2+chieff_ud*chieff_uu) / (2*chi1*chieff)
     costheta1kappaminus = np.where(condition, costheta1kappaminus_less, costheta1kappaminus_gtr)
-    theta1kappaminus = np.arccos(costheta1kappaminus)
+    theta1kappaminus = _arccos_roundoff(costheta1kappaminus)
     costheta2kappaminus_less = -costheta1kappaminus_less
     costheta2kappaminus_gtr = (1+q) * (chieff**2-chieff_ud*chieff_uu) / (2*q*chi2*chieff)
     costheta2kappaminus = np.where(condition, costheta2kappaminus_less, costheta2kappaminus_gtr)
-    theta2kappaminus = np.arccos(costheta2kappaminus)
+    theta2kappaminus = _arccos_roundoff(costheta2kappaminus)
     deltaphikappaminus = np.ones_like(condition) * np.pi
     
     return np.stack([theta1kappaminus, theta2kappaminus, deltaphikappaminus, thetakappaplus, thetakappaplus, deltaphikappaplus])
@@ -4648,8 +4662,8 @@ def omegasq_aligned(r, q, chi1, chi2, which):
     # +1 if secondary is co-aligned, -1 if secondary is counter-aligned
     alpha2 = np.where(np.isin(which, np.concatenate([uulabels, dulabels])), 1, -1)
 
-    theta1 = np.arccos(alpha1)
-    theta2 = np.arccos(alpha2)
+    theta1 = _arccos_roundoff(alpha1)
+    theta2 = _arccos_roundoff(alpha2)
     deltachi = eval_deltachi(theta1, theta2, q, chi1, chi2)
     chieff = eval_chieff(theta1, theta2, q, chi1, chi2)
     
@@ -4805,7 +4819,7 @@ def rhs_precav(kappa, u, chieff, q, chi1, chi2):
 
         Ssav = (2*kappa - chieff - (1-q)/(1+q)*deltachiav)/(2*u)
 
-    return float(Ssav)
+    return np.asarray(Ssav).item()
 
 
 def integrator_precav(kappainitial, u, chieff, q, chi1, chi2, **odeint_kwargs):
@@ -5015,7 +5029,7 @@ def inspiral_precav(theta1=None, theta2=None, deltaphi=None, kappa=None, r=None,
     allresults = np.array(list(map(_compute, theta1, theta2, deltaphi, kappa, r, u, chieff, q, chi1, chi2)), dtype=object).T
 
     # Return only requested outputs (in1d return boolean array)
-    wantoutputs = np.in1d(alloutputs, requested_outputs)
+    wantoutputs = np.isin(alloutputs, requested_outputs)
 
     # Store into a dictionary
     outcome = {}
@@ -5460,7 +5474,7 @@ def inspiral_orbav(theta1=None, theta2=None, deltaphi=None, Lh=None, S1h=None, S
     if requested_outputs is None:
         requested_outputs = alloutputs
     # Return only those requested (in1d return boolean array)
-    wantoutputs = np.in1d(alloutputs, requested_outputs)
+    wantoutputs = np.isin(alloutputs, requested_outputs)
 
     # Store into a dictionary
     outcome = {}
@@ -5970,19 +5984,19 @@ def remnantspindirection(theta1, theta2, deltaphi, r, q, chi1, chi2):
     
     Returns
     -------
-    thetaL: float
-        Angle betwen orbital angular momentum and total angular momentum.
+    hatJ: array
+        Unit total-angular-momentum vector in the L-aligned frame.
     
     Examples
     --------
-    ``thetaL = precession.remnantspindirection(theta1,theta2,deltaphi,r,q,chi1,chi2)``
+    ``hatJ = precession.remnantspindirection(theta1,theta2,deltaphi,r,q,chi1,chi2)``
     """
 
     Lvec,S1vec,S2vec = angles_to_Lframe(theta1, theta2, deltaphi, r, q, chi1, chi2)
     Jvec = Lvec + S1vec + S2vec
     hatL = normalize_nested(Lvec)
     hatJ = normalize_nested(Jvec)
-    thetaL = np.arccos(dot_nested(hatL,hatJ))
+    thetaL = _arccos_roundoff(dot_nested(hatL,hatJ))
 
     return hatJ
 
@@ -6018,7 +6032,7 @@ def remnantkick(theta1, theta2, deltaphi, q, chi1, chi2, kms=True, maxphase=Fals
         Dimensionless spin of the primary (heavier) black hole: 0<=chi1<=1.
     chi2: float
         Dimensionless spin of the secondary (lighter) black hole: 0<=chi2<=1.
-    kms: boolean, optional (default: False)
+    kms: boolean, optional (default: True)
         Return velocities in km/s.
     maxphase: boolean, optional (default: False)
         Maximize over orbital phase at merger.
@@ -6028,7 +6042,7 @@ def remnantkick(theta1, theta2, deltaphi, q, chi1, chi2, kms=True, maxphase=Fals
         Switch kick terms on and off.
     crosskick: boolean, optional (default: True)
         Switch kick terms on and off.
-    full_output: boolean, optional (default: False)
+    full_output: boolean, optional (default: True)
         Return additional outputs.
     
     Returns

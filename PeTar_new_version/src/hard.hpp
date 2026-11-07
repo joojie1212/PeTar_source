@@ -313,7 +313,7 @@ public:
         //    }
         //}
 
-//#ifdef HARD_DEBUG
+#ifdef HARD_DEBUG_PRINT
         if (_n_ptcl>1000) {
             std::cerr<<"Large cluster, n_ptcl="<<_n_ptcl<<" n_group="<<_n_group<<std::endl;
             //std::pair<PS::S32,PS::F64> r_search_max={-1,0.0};
@@ -327,7 +327,7 @@ public:
             //ptcl_origin[r_search_max.first].print(std::cerr);
             //std::cerr<<std::endl;
         }
-//#endif
+#endif
 
         // prepare initial groups with artificial particles
         PS::S32 adr_first_ptcl[_n_group+1];
@@ -909,7 +909,7 @@ public:
             PS::F64 rij2 = h4_int.neighbors[i].r_min_sq;
             PS::F64 r_out_i = h4_int.particles[i].changeover.getRout();
             PS::F64 r_out_j = (j<index_offset_group)? h4_int.particles[j].changeover.getRout() : h4_int.groups[j-index_offset_group].particles.cm.changeover.getRout();
-            if (rij2<std::max(r_out_i, r_out_j)) table_neighbor_exist[i] = true;
+            if (rij2<std::max(r_out_i*r_out_i, r_out_j*r_out_j)) table_neighbor_exist[i] = true;
         }
         PS::S32 n_act_group = h4_int.getNActGroup();
         PS::S32* act_group_index = h4_int.getSortDtIndexGroup();
@@ -922,7 +922,7 @@ public:
             PS::F64 rij2 = h4_int.groups[i].perturber.r_min_sq;
             PS::F64 r_out_i = h4_int.groups[i].particles.cm.changeover.getRout();
             PS::F64 r_out_j = (j<index_offset_group)? h4_int.particles[j].changeover.getRout() : h4_int.groups[j-index_offset_group].particles.cm.changeover.getRout();
-            if (rij2<std::max(r_out_i, r_out_j)) {
+            if (rij2<std::max(r_out_i*r_out_i, r_out_j*r_out_j)) {
                 for (int ki=0; ki<h4_int.groups[i].particles.getSize(); ki++) {
                     PS::S32 ki_index = h4_int.groups[i].info.particle_index[ki];
                     ASSERT(ki_index>=0&&ki_index<table_neighbor_exist.size());
@@ -1673,7 +1673,7 @@ private:
         const PS::F64 eps_sq = EPISoft::eps * EPISoft::eps;
 
         const PS::F64vec dr = _pi.pos - _pj.pos;
-        const PS::F64vec da = _pi.acc - _pi.acc;
+        const PS::F64vec da = _pi.acc - _pj.acc;
         const PS::F64 dr2 = dr * dr;
         const PS::F64 dr2_eps = dr2 + eps_sq;
         const PS::F64 drda = dr*da;
@@ -1734,7 +1734,7 @@ private:
         const PS::F64 r_out2 = r_out * r_out;
 
         const PS::F64vec dr = _pi.pos - _pj.pos;
-        const PS::F64vec da = _pi.acc - _pi.acc;
+        const PS::F64vec da = _pi.acc - _pj.acc;
         const PS::F64 dr2 = dr * dr;
         const PS::F64 dr2_eps = dr2 + eps_sq;
         const PS::F64 drda = dr*da;

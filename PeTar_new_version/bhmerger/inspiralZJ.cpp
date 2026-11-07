@@ -2,15 +2,62 @@
 #include <numpy/arrayobject.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+
+#ifndef PETAR_PRECESSION_SOURCE_DIR
+#define PETAR_PRECESSION_SOURCE_DIR ""
+#endif
+#ifndef PETAR_PRECESSION_INSTALL_DIR
+#define PETAR_PRECESSION_INSTALL_DIR ""
+#endif
 
 #include "inspiralZJ.hpp"
 
 namespace {
+
+// Only cancellation at the circular limit may be rounded to zero.
+bool eccentricityFromEnergyTerm(double term, double& eccentricity) {
+    if (!std::isfinite(term)) return false;
+    const double e2=1.0+term;
+    const double tolerance=32.0*std::numeric_limits<double>::epsilon()
+                         *std::max(1.0,std::abs(term));
+    if (e2 < -tolerance) return false;
+    eccentricity=std::sqrt(std::max(0.0,e2));
+    return true;
+}
+
+bool configurePrecessionPath() {
+    const char* override_path=std::getenv("PETAR_PRECESSION_PATH");
+    const char* candidates[]={override_path, PETAR_PRECESSION_SOURCE_DIR,
+                              PETAR_PRECESSION_INSTALL_DIR};
+    for (const char* candidate: candidates) {
+        if (!candidate || !candidate[0]) continue;
+        std::error_code error;
+        const auto path=std::filesystem::absolute(candidate,error);
+        if (!error && std::ifstream(path/"precession"/"__init__.py").good()) {
+            PyObject* python_path=PySys_GetObject("path"); // borrowed
+            PyObject* entry=PyUnicode_DecodeFSDefault(path.c_str());
+            if (!entry) return false;
+            const bool ok=python_path && PyList_Insert(python_path,0,entry)==0;
+            Py_DECREF(entry);
+            return ok;
+        }
+        if (candidate==override_path) {
+            std::fprintf(stderr,"Invalid PETAR_PRECESSION_PATH: %s\n",candidate);
+            return false; // An explicit override must not silently select another package.
+        }
+    }
+    std::fprintf(stderr,"Cannot locate bundled precession; set PETAR_PRECESSION_PATH\n");
+    return false;
+}
 
 bool setDoubleKeyword(PyObject* dict, const char* key, double value) {
     if (!dict || PyErr_Occurred()) return false;
@@ -40,19 +87,21 @@ bool validArray(PyObject* object, npy_intp size) {
     return true;
 }
 
-double arrayValue(PyObject* object, bool two_dimensional) {
+double arrayValue(PyObject* object, bool two_dimensional, bool circular_e=false) {
     if (!object || !PyArray_Check(object)) return NAN;
     auto* array = reinterpret_cast<PyArrayObject*>(object);
     if (PyArray_NDIM(array) != (two_dimensional ? 2 : 1)
         || PyArray_DIM(array, 0) < 1
-        || (two_dimensional && PyArray_DIM(array, 1) < 2)) return NAN;
-    char* address = static_cast<char*>(two_dimensional ? PyArray_GETPTR2(array,0,1)
+        || (two_dimensional && PyArray_DIM(array, 1) < (circular_e ? 1 : 2))) return NAN;
+    const bool constant_e = two_dimensional && PyArray_DIM(array, 1)==1;
+    char* address = static_cast<char*>(two_dimensional
+                                      ? PyArray_GETPTR2(array,0,PyArray_DIM(array,1)-1)
                                                        : PyArray_GETPTR1(array,0));
     PyObject* item = PyArray_GETITEM(array, address);
     if (!item) return NAN;
     const double value = PyFloat_AsDouble(item);
     Py_DECREF(item);
-    return value;
+    return constant_e && value!=0.0 ? NAN : value;
 }
 
 bool setStringListKeyword(PyObject* dict, const char* key,
@@ -92,6 +141,7 @@ struct InspiralParameters {
 thread_local InspiralParameters Inspiraloutputs{};
 thread_local BHMerger::RemnantParameters Remnantoutputs{};
 bool bhmerger_python_owned = false;
+std::atomic<bool> bhmerger_api_ready{false};
 PyThreadState* bhmerger_main_thread_state = nullptr;
 
 // Recover the adiabatically evolved constants without requesting a random
@@ -141,7 +191,7 @@ bool recoverResonantInspiral(PyObject* module,
     InspiralParameters candidate = encounter;
     candidate.kappa = arrayValue(PyDict_GetItemString(result, "kappa"), true);
     candidate.a = arrayValue(PyDict_GetItemString(result, "a"), true);
-    candidate.e = arrayValue(PyDict_GetItemString(result, "e"), true);
+    candidate.e = arrayValue(PyDict_GetItemString(result, "e"), true, encounter.e==0.0);
     candidate.uc = arrayValue(PyDict_GetItemString(result, "uc"), true);
     candidate.u = arrayValue(PyDict_GetItemString(result, "u"), true);
     const double root_minus = arrayValue(
@@ -269,36 +319,31 @@ BHMerger::RemnantParameters BHMerger::getRemnant() {
 // Initialize the embedded interpreter on the application's main thread before
 // any OpenMP worker can enter calculateRemnant(). Returns 0 on success.
 int BHMerger::initializePython() {
-    if (Py_IsInitialized()) return 0;
-
-    Py_Initialize();
+    if (Py_IsInitialized() && bhmerger_api_ready.load()) return 0;
+    const bool own_interpreter = !Py_IsInitialized();
+    if (own_interpreter) Py_Initialize();
     if (!Py_IsInitialized()) {
         std::fprintf(stderr, "Failed to initialize embedded Python\n");
         return -1;
     }
-    bhmerger_python_owned = true;
-
-    if (_import_array() < 0) {
-        PyErr_Print();
-        std::fprintf(stderr, "Failed to initialize NumPy C API\n");
-        Py_FinalizeEx();
-        bhmerger_python_owned = false;
-        return -1;
+    const PyGILState_STATE gil = PyGILState_Ensure();
+    // Another caller may have completed bridge setup while we waited for GIL.
+    if (!bhmerger_api_ready.load()) {
+        if (_import_array() < 0 || !configurePrecessionPath()) {
+            if (PyErr_Occurred()) PyErr_Print();
+            std::fprintf(stderr, "Failed to initialize BH Python bridge\n");
+            PyGILState_Release(gil);
+            if (own_interpreter) Py_FinalizeEx();
+            return -1;
+        }
+        bhmerger_python_owned = own_interpreter;
+        bhmerger_api_ready.store(true);
     }
-
-    if (PyRun_SimpleString(
-            "import sys; "
-            "sys.path.insert(0, './bhmerger/precession-master'); "
-            "sys.path.insert(0, 'bhmerger/precession-master')") != 0) {
-        PyErr_Print();
-        std::fprintf(stderr, "Failed to configure embedded Python module path\n");
-        Py_FinalizeEx();
-        bhmerger_python_owned = false;
-        return -1;
+    PyGILState_Release(gil);
+    if (own_interpreter) {
+        // Only release our own main thread state. The host retains its GIL policy.
+        bhmerger_main_thread_state = PyEval_SaveThread();
     }
-
-    // Release the GIL so OpenMP worker threads can acquire it around Python calls.
-    bhmerger_main_thread_state = PyEval_SaveThread();
     return 0;
 }
 
@@ -313,6 +358,7 @@ int BHMerger::finalizePython() {
         bhmerger_main_thread_state = nullptr;
     }
 
+    bhmerger_api_ready.store(false);
     const int status = Py_FinalizeEx();
     bhmerger_python_owned = false;
     return status;
@@ -535,7 +581,12 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
 
     double clight = C;
     double a0 = G*m1*m2/(2*std::fabs(E))*clight*clight/(G*m);
-    double e = std::sqrt(1 + 2*E*L*L / (meff*G*G*m1*m1*m2*m2));
+    double e;
+    if (!eccentricityFromEnergyTerm(
+            2*E*L*L / (meff*G*G*m1*m1*m2*m2), e)) {
+        std::fprintf(stderr,"Invalid eccentricity squared in BH remnant input\n");
+        CAL_REMNANT_RETURN(false);
+    }
     const bool is_bound_inspiral = (E < 0.0 && e >= 0.0 && e < 1.0);
 
     double chi1 = tots1;
@@ -645,7 +696,7 @@ bool BHMerger::calculateRemnant(double m1,double m2,double dx,double dy,double d
         Inspiraloutputs.deltachi= arrayValue(deltachi_arr, true); 
         Inspiraloutputs.kappa = arrayValue(kappa_arr, true); 
         Inspiraloutputs.a = arrayValue(a_arr, true); 
-        Inspiraloutputs.e = arrayValue(e_arr, true); 
+        Inspiraloutputs.e = arrayValue(e_arr, true, e==0.0);
         Inspiraloutputs.uc = arrayValue(uc_arr, true); 
         Inspiraloutputs.u = arrayValue(u_arr, true); 
         // 这几个是一维数组，取第一个元素 

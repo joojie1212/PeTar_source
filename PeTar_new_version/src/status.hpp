@@ -314,7 +314,7 @@ public:
             // new position prediction from backup pcm
             PS::F64vec vel_pred = pcm_bk.vel + 0.5*pcm_bk.acc*dt; // half step to get median velocity
             PS::F64vec dpos_pred = vel_pred*dt;
-            PS::F64 dpos_rel_pred = std::sqrt(dpos_pred[0]*dpos_pred[0] + dpos_pred[1]*dpos_pred[2] + dpos_pred[1]*dpos_pred[2]);
+            PS::F64 dpos_rel_pred = std::sqrt(dpos_pred[0]*dpos_pred[0] + dpos_pred[1]*dpos_pred[1] + dpos_pred[2]*dpos_pred[2]);
 
 #ifdef RECORD_CM_IN_HEADER
             // new calculated pcm is in old c.m. frame

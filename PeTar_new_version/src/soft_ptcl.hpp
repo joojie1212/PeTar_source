@@ -4,10 +4,10 @@
 
 class ForceSoft{
 public:
-    PS::F64vec acc; ///> soft acceleration (c.m.: averaged force from orbital particles; tensor: c.m. is substracted)
+    PS::F64vec acc = 0.0; ///> soft acceleration (c.m.: averaged force from orbital particles; tensor: c.m. is substracted)
     PS::F64 pot; ///> full potential
 #ifdef KDKDK_4TH
-    PS::F64vec acorr; ///> soft gradient correction for 4th order KDKDK method
+    PS::F64vec acorr = 0.0; ///> soft gradient correction for 4th order KDKDK method
 #endif
 #ifdef SAVE_NEIGHBOR_ID_IN_FORCE_KERNEL
     PS::S64 id_ngb[4]; /// five neighbor id
@@ -16,6 +16,9 @@ public:
     static PS::F64 grav_const; ///> gravitational constant
     void clear(){
         acc = 0.0;
+#ifdef KDKDK_4TH
+        acorr = 0.0;
+#endif
         pot = 0.0;
         n_ngb = 0;
 #ifdef SAVE_NEIGHBOR_ID_IN_FORCE_KERNEL
@@ -26,14 +29,14 @@ public:
 
 class FPSoft: public Ptcl{
 public:
-    PS::F64vec acc; // soft
+    PS::F64vec acc = 0.0; // soft
 #ifdef KDKDK_4TH
-    PS::F64vec acorr;
+    PS::F64vec acorr = 0.0;
 #endif
-    PS::F64 pot_tot; // soft + hard
-    PS::F64 pot_soft; // soft only
+    PS::F64 pot_tot = 0.0; // soft + hard
+    PS::F64 pot_soft = 0.0; // soft only
 #ifdef EXTERNAL_POT_IN_PTCL
-    PS::F64 pot_ext; // external potential
+    PS::F64 pot_ext = 0.0; // external potential
 #endif
 #ifdef SAVE_NEIGHBOR_ID_IN_FORCE_KERNEL
     PS::S64 id_ngb[4];
@@ -48,7 +51,7 @@ public:
 #endif
 //    static PS::F64 r_out;
 
-    FPSoft() {}
+    FPSoft() { pos = 0.0; vel = 0.0; n_ngb = 0; rank_org = adr = 0; }
 
     //! Get position (required for \ref ARC::chain)
     /*! \return position vector (PS::F64[3])
@@ -119,18 +122,22 @@ public:
 #endif        
         fprintf(fp, "%lld",this->n_ngb);
 #ifdef BHMERGER
-        fprintf(fp, " #BHMERGER_V1 %.17g", this->time_merger);
+        fprintf(fp, " #BHMERGER_V2 %.17g %.17g %.17g %.17g %.17g",
+                this->time_merger, this->merger_semi, this->merger_ecc,
+                this->merger_record_time, this->merger_dyn_log_tgw);
 #endif
         fprintf(fp, "\n");
     }
 
     void writeBinary(FILE* fp) const{
         Ptcl::writeBinary(fp);
+        const PS::F64 values[] = {acc.x, acc.y, acc.z, pot_tot, pot_soft
 #ifdef EXTERNAL_POT_IN_PTCL
-        fwrite(&(this->acc), sizeof(PS::F64), 7, fp);
-#else
-        fwrite(&(this->acc), sizeof(PS::F64), 6, fp);
+            , pot_ext
 #endif
+        };
+        fwrite(values, sizeof(PS::F64), sizeof(values)/sizeof(values[0]), fp);
+        fwrite(&n_ngb, sizeof(n_ngb), 1, fp);
     }
 
     void readAscii(FILE* fp) {
@@ -139,7 +146,7 @@ public:
                               &this->acc.x, &this->acc.y, &this->acc.z,  // 9-11
                               &this->pot_tot, &this->pot_soft);
         if (rcount<5) {
-            std::cerr<<"Error: FPSoft Data reading fails! requiring data number is 6, only obtain "<<rcount<<".\n";
+            std::cerr<<"Error: FPSoft Data reading fails! requiring data number is 5, only obtain "<<rcount<<".\n";
             std::cerr<<"Check your input data, whether the consistent features (interrupt mode and external mode) are used in configuring petar and the data generation\n";
             abort();
         }
@@ -160,15 +167,37 @@ public:
         // Optional suffix is line-local; old initial conditions have no suffix.
 #ifdef BHMERGER
         this->time_merger = -1.0;
+        this->merger_semi = this->merger_ecc = this->merger_record_time = -1.0;
+        this->merger_dyn_log_tgw = 0.0;
 #endif
         char suffix[256];
         if (fgets(suffix, sizeof(suffix), fp)) {
 #ifdef BHMERGER
-            const char* marker = std::strstr(suffix, "#BHMERGER_V1");
-            if (marker && (sscanf(marker, "#BHMERGER_V1 %lf", &this->time_merger) != 1
-                           || !std::isfinite(this->time_merger))) {
-                std::cerr << "Invalid BHMERGER_V1 restart deadline" << std::endl;
-                abort();
+            const char* marker = std::strstr(suffix, "#BHMERGER_V2");
+            if (marker) {
+                if (sscanf(marker, "#BHMERGER_V2 %lf %lf %lf %lf %lf",
+                           &this->time_merger, &this->merger_semi, &this->merger_ecc,
+                           &this->merger_record_time, &this->merger_dyn_log_tgw)!=5
+                    || !std::isfinite(this->time_merger)
+                    || !std::isfinite(this->merger_semi)
+                    || !std::isfinite(this->merger_ecc)
+                    || !std::isfinite(this->merger_record_time)
+                    || !std::isfinite(this->merger_dyn_log_tgw)
+                    || (this->merger_record_time>=0.0
+                        && (!(this->merger_semi>0.0) || this->merger_ecc<0.0
+                            || this->merger_ecc>=1.0))) {
+                    std::cerr << "Invalid BHMERGER_V2 restart state" << std::endl;
+                    abort();
+                }
+            } else {
+                // V1 preserves only the deadline; the missing checkpoint must
+                // be reconstructed on first use, as for historical snapshots.
+                marker = std::strstr(suffix, "#BHMERGER_V1");
+                if (marker && (sscanf(marker, "#BHMERGER_V1 %lf", &this->time_merger)!=1
+                               || !std::isfinite(this->time_merger))) {
+                    std::cerr << "Invalid BHMERGER_V1 restart deadline" << std::endl;
+                    abort();
+                }
             }
 #endif
         }
@@ -177,19 +206,22 @@ public:
     void readBinary(FILE* fp) {
         Ptcl::readBinary(fp);
 #ifdef EXTERNAL_POT_IN_PTCL
-        size_t rcount = fread(&(this->acc), sizeof(PS::F64), 7, fp);
-        if (rcount<7) {
-            std::cerr<<"Error: Data reading fails! requiring data number is 7, only obtain "<<rcount<<".\n";
-            std::cerr<<"Check your input data, whether the consistent features (interrupt mode and external mode) are used in configuring petar and the data generation\n";
-            abort();
-        }
+        PS::F64 values[6];
 #else
-        size_t rcount = fread(&(this->acc), sizeof(PS::F64), 6, fp);
-        if (rcount<6) {
-            std::cerr<<"Error: Data reading fails! requiring data number is 6, only obtain "<<rcount<<".\n";
-            std::cerr<<"Check your input data, whether the consistent features (interrupt mode and external mode) are used in configuring petar and the data generation\n";
+        PS::F64 values[5];
+#endif
+        const size_t n = sizeof(values)/sizeof(values[0]);
+        if (fread(values, sizeof(PS::F64), n, fp)!=n || fread(&n_ngb, sizeof(n_ngb), 1, fp)!=1) {
+            std::cerr << "Truncated FPSoft binary data\n";
             abort();
         }
+        acc = PS::F64vec(values[0],values[1],values[2]);
+        pot_tot = values[3]; pot_soft = values[4];
+#ifdef EXTERNAL_POT_IN_PTCL
+        pot_ext = values[5];
+#endif
+#ifdef KDKDK_4TH
+        acorr = 0.0; // transient force correction, recomputed after restart
 #endif
     }
 
@@ -290,6 +322,9 @@ public:
         pot_dm = 0.0;
 #endif
         acc = 0.0;
+#ifdef KDKDK_4TH
+        acorr = 0.0;
+#endif
         pot_tot = 0.0;
         pot_soft = 0.0;
 #ifdef EXTERNAL_POT_IN_PTCL
@@ -307,7 +342,7 @@ public:
     PS::S32 rank_org;
     PS::S32 type; // 0: orbital artificial particles; 1: others
 #ifdef KDKDK_4TH
-    PS::F64vec acc;
+    PS::F64vec acc = 0.0;
 #endif
     static PS::F64 eps;
     static PS::F64 r_out;
@@ -346,7 +381,7 @@ public:
     PS::F64vec pos;
     PS::F64vec vel;
 #ifdef KDKDK_4TH
-    PS::F64vec acc;
+    PS::F64vec acc = 0.0;
 #endif
     PS::F64 r_in;
     PS::F64 r_out;

@@ -229,6 +229,8 @@ CUDA_INCLUDE += -I./src @PETAR_INCLUDE@
 
 ifeq ($(use_bhmerger),yes)
 BHMERGER_OBJS = build/inspiralZJ.o
+BHMERGER_PATH_FLAGS = -DPETAR_PRECESSION_SOURCE_DIR='"$(abspath bhmerger/precession-master)"' \
+                      -DPETAR_PRECESSION_INSTALL_DIR='"@prefix@/share/petar/python"'
 OBJS += $(BHMERGER_OBJS)
 CXXLIBS += $(BHMERGER_LIBS)
 PETAR_INCLUDE += -I./bhmerger
@@ -267,6 +269,9 @@ build/petar.tide_collision.test: test/tide_collision.cxx $(HARD_SRC) two_body_ti
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
 
 # Compile-time isolated regression for the optional frozen-binary policy.
+build/petar.escape_removal.test: test/escape_removal.cxx $(filter-out main.cc,$(SRC)) $(OBJS) $(LIBFILES) |build
+	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(FDPSFLAGS) $(MT_FLAGS) -D ESCAPE_REMOVAL_DEBUG -o $@ $< $(OBJS) $(CXXLIBS)
+
 build/petar.orbit_change.test: test/orbit_change.cxx $(HARD_SRC) bhmerger_output.hpp $(BSELIBFILES) |build
 	$(CXX) $(PETAR_INCLUDE) $(DEBUG_OPT_FLAGS) $(CXXFLAGS) $(MT_FLAGS) $(HARD_DEBFLAGS) -o $@ $< $(BHMERGER_OBJS) $(BSELIBS) $(BHMERGER_LIBS)
 
@@ -297,7 +302,7 @@ build/force_gpu_cuda.o: force_gpu_cuda.cu |build
 	$(NVCC) $(CUDA_INCLUDE) -c $< -o $@ 
 
 build/inspiralZJ.o: bhmerger/inspiralZJ.cpp bhmerger/inspiralZJ.hpp |build
-	$(CXX) $(CXXFLAGS) $(BHMERGER_CFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(BHMERGER_CFLAGS) $(BHMERGER_PATH_FLAGS) -c $< -o $@
 
 install_script_tool:
 	install -d @prefix@/bin/
@@ -314,7 +319,15 @@ install_script_tool:
 	install -d @prefix@/include/petar
 	install -m 644 tools/analysis/*.py @prefix@/include/petar/
 
-install: $(TARGET) SE_INSTALL EXT_INSTALL install_script_tool
+# Stage this target with DESTDIR to test packaging without installing binaries.
+.PHONY: install_bhmerger_python
+install_bhmerger_python:
+ifeq ($(use_bhmerger),yes)
+	install -d "$(DESTDIR)@prefix@/share/petar/python/precession"
+	install -m 644 bhmerger/precession-master/precession/*.py "$(DESTDIR)@prefix@/share/petar/python/precession/"
+endif
+
+install: $(TARGET) SE_INSTALL EXT_INSTALL install_script_tool install_bhmerger_python
 	install -d @prefix@/bin/
 	install -m 755 $(TARGET) @prefix@/bin/
 	ln -sf @prefix@/bin/@PROG_NAME@ @prefix@/bin/petar

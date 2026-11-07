@@ -511,7 +511,7 @@ namespace ParticleSimulator{
         template<class Tepj>
         void accumulateAtLeaf2(const Tepj & epj){}
         void set(){
-            pos = pos / mass;
+            pos = mass != 0 ? pos / mass : FSPvec(0.0);
         }
         void accumulate(const MomentMonopoleCutoffScatter & mom){
             this->mass += mom.mass;

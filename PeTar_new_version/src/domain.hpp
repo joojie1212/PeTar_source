@@ -26,7 +26,10 @@ template<class Tsys>
 inline void DomainDecision(PS::DomainInfo & dinfo,
 			   const Tsys & system){
     const PS::S32 n_proc = PS::Comm::getNumberOfProc();
-    assert(n_proc%4 == 0);
+    if (n_proc%4 != 0) {
+        std::cerr << "DomainDecision requires a process count divisible by four" << std::endl;
+        PS::Abort();
+    }
     if(n_proc%4 == 0){
 	int n_loc_tmp = system.getNumberOfParticleLocal();
 	int * n_recv_tmp = new int[n_proc];

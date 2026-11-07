@@ -641,45 +641,14 @@
                      MCO = mc
                   endif
                   if(nsflag.eq.3)then
-* Fallback based remnant masses of Fryer et al. 2012, ApJ, 749, 91.  
-* nsflag=3 for rapid SN, nsflag=4 for delayed SN
-                     if(mc.lt.2.5d0)then
-                        FBTOT = 0.2d0 
-                        FBFAC = FBTOT/(mt - mcx)
-                     elseif(mc.lt.6.0d0)then
-                        FBTOT = 0.286d0*mc - 0.514d0
-                        FBFAC = FBTOT/(mt - mcx)
-                     elseif(mc.lt.7.0d0)then
-                        FBFAC = 1.0d0
-                        FBTOT = FBFAC*(mt - mcx)
-                     elseif(mc.lt.11.0d0)then
-                        a1 = 0.25d0 - 1.275d0/(mt - mcx)
-                        b1 = -11.0d0*a1 + 1.0d0 
-                        FBFAC = a1*mc + b1 
-                        FBTOT = FBFAC*(mt - mcx)
-                     else
-                        FBFAC = 1.0d0
-                        FBTOT = FBFAC*(mt - mcx)
-                     endif
+                     CALL bounded_fallback(mc,mt-mcx,nsflag,
+     &                    fbfac,fbtot)
                      mt = mcx + FBTOT
                      MCO = mc
                   endif
                   if(nsflag.eq.4)then
-                     if(mc.lt.2.5d0)then
-                        FBTOT = 0.2d0 
-                        FBFAC = FBTOT/(mt - mcx)
-                     elseif(mc.lt.3.5d0)then
-                        FBTOT = 0.5d0*mc - 1.05d0
-                        FBFAC = FBTOT/(mt - mcx)
-                     elseif(mc.lt.11.0d0)then
-                        a2 = 0.133d0 - 0.093d0/(mt - mcx)
-                        b2 = -11.0d0*a2 + 1.0d0 
-                        FBFAC = a2*mc + b2 
-                        FBTOT = FBFAC*(mt - mcx)
-                     else
-                        FBFAC = 1.0d0
-                        FBTOT = FBFAC*(mt - mcx)
-                     endif
+                     CALL bounded_fallback(mc,mt-mcx,nsflag,
+     &                    fbfac,fbtot)
                      mt = mcx + FBTOT
                      MCO = mc
                   endif
@@ -891,43 +860,14 @@
                         MCO = mc
                      endif
                      if(nsflag.eq.3)then
-                        if(mc.lt.2.5d0)then
-                           FBTOT = 0.2d0 
-                           FBFAC = FBTOT/(mt - mcx)
-                        elseif(mc.lt.6.0d0)then
-                           FBTOT = 0.286d0*mc - 0.514d0
-                           FBFAC = FBTOT/(mt - mcx)
-                        elseif(mc.lt.7.0d0)then
-                           FBFAC = 1.0d0
-                           FBTOT = FBFAC*(mt - mcx)
-                        elseif(mc.lt.11.0d0)then
-                           a1 = 0.25d0 - 1.275d0/(mt - mcx)
-                           b1 = -11.0d0*a1 + 1.0d0 
-                           FBFAC = a1*mc + b1 
-                           FBTOT = FBFAC*(mt - mcx)
-                        else
-                           FBFAC = 1.0d0
-                           FBTOT = FBFAC*(mt - mcx)
-                        endif
+                        CALL bounded_fallback(mc,mt-mcx,nsflag,
+     &                    fbfac,fbtot)
                         mt = mcx + FBTOT
                         MCO = mc
                      endif
                      if(nsflag.eq.4)then
-                        if(mc.lt.2.5d0)then
-                           FBTOT = 0.2d0 
-                           FBFAC = FBTOT/(mt - mcx)
-                        elseif(mc.lt.3.5d0)then
-                           FBTOT = 0.5d0*mc - 1.05d0
-                           FBFAC = FBTOT/(mt - mcx)
-                        elseif(mc.lt.11.0d0)then
-                           a2 = 0.133d0 - 0.093d0/(mt - mcx)
-                           b2 = -11.0d0*a2 + 1.0d0 
-                           FBFAC = a2*mc + b2 
-                           FBTOT = FBFAC*(mt - mcx)
-                        else
-                           FBFAC = 1.0d0
-                           FBTOT = FBFAC*(mt - mcx)
-                        endif
+                        CALL bounded_fallback(mc,mt-mcx,nsflag,
+     &                    fbfac,fbtot)
                         mt = mcx + FBTOT
                         MCO = mc
                      endif
@@ -1141,3 +1081,40 @@
       return
       end
 ***
+
+      SUBROUTINE bounded_fallback(mc,env,nsflag,fbfac,fbtot)
+* Fryer rapid/delayed fallback with a finite available envelope.
+* Evaluate the fallback mass first, avoiding division by a thin envelope.
+      implicit none
+      integer nsflag
+      real*8 mc,env,fbfac,fbtot
+      fbfac = 0.d0
+      fbtot = 0.d0
+      if(env.le.0.d0) return
+      if(nsflag.eq.3)then
+         if(mc.lt.2.5d0)then
+            fbtot = 0.2d0
+         elseif(mc.lt.6.d0)then
+            fbtot = 0.286d0*mc - 0.514d0
+         elseif(mc.lt.7.d0.or.mc.ge.11.d0)then
+            fbtot = env
+         else
+            fbtot = (0.25d0*(mc-11.d0)+1.d0)*env
+     &            - 1.275d0*(mc-11.d0)
+         endif
+      elseif(nsflag.eq.4)then
+         if(mc.lt.2.5d0)then
+            fbtot = 0.2d0
+         elseif(mc.lt.3.5d0)then
+            fbtot = 0.5d0*mc - 1.05d0
+         elseif(mc.lt.11.d0)then
+            fbtot = (0.133d0*(mc-11.d0)+1.d0)*env
+     &            - 0.093d0*(mc-11.d0)
+         else
+            fbtot = env
+         endif
+      endif
+      fbtot = MAX(0.d0,MIN(env,fbtot))
+      fbfac = fbtot/env
+      return
+      end

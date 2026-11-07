@@ -158,6 +158,7 @@ extern "C" {
     //             double* zpars, double* ecc, double* sep, double* jorb, double* vkick1, double* vkick2, int* coel);
 
     void merge_(int* kw, double* m0, double* mt, double* r, double* mc, double* rc, double* menv, double* renv, double* ospin, double* age, double* semi, double* ecc, double* vkick, double* zpars);
+    void merge_structure_(int* kw, double* m0, double* mt, double* r, double* mc, double* rc, double* menv, double* renv, double* ospin, double* age, double* semi, double* ecc, double* vkick, double* zpars, double* lum, double* tm);
 
     void printconst_();
 }
@@ -259,6 +260,7 @@ extern "C" {
     //             double* zpars, double* ecc, double* sep, double* jorb, double* vkick1, double* vkick2, int* coel);
 
     void merge_(int* kw, double* m0, double* mt, double* r, double* mc, double* rc, double* menv, double* renv, double* ospin, double* age, double* semi, double* ecc, double* vkick, double* zpars);
+    void merge_structure_(int* kw, double* m0, double* mt, double* r, double* mc, double* rc, double* menv, double* renv, double* ospin, double* age, double* semi, double* ecc, double* vkick, double* zpars, double* lum, double* tm);
 
     void printconst_();
 }
@@ -298,6 +300,7 @@ struct StarParameter{
         ospin = _ospin;
         epoch = _epoch;
         tphys = _epoch;
+        lum = 0.0;
     }
 
     //! write class data with ASCII format
@@ -749,7 +752,7 @@ public:
                    mscale(input_par_store, 1.0,   "bse-mscale", "Mass scale factor from input data unit (IN) to Msun (m[Msun]=m[IN]*mscale)"),
                    vscale(input_par_store, 1.0,   "bse-vscale", "Velocity scale factor from input data unit(IN) to km/s (v[km/s]=v[IN]*vscale)"),
 #ifdef BSEEMP
-                   z     (input_par_store, 0.001, "bse-metallicity", "Metallicity Z, ranging from 0 to 0.03; when Z<0.0001, using EMP track, please make a symbolic link in the simulation directory to the track directory according to the --bse-trackmode option"),
+                   z     (input_par_store, 0.001, "bse-metallicity", "Metallicity Z, strictly positive and at most 0.03; when Z<0.0001, using EMP track, please make a symbolic link in the simulation directory to the track directory according to the --bse-trackmode option"),
 #else
                    z     (input_par_store, 0.001, "bse-metallicity", "Metallicity Z, ranging from 0.0001 to 0.03"),
 #endif
@@ -1136,7 +1139,10 @@ public:
     
 
     bool checkParams() {
-        assert(z>0.0);
+        if (!(z>0.0) || !std::isfinite(z)) {
+            std::cerr << "BSE metallicity must be finite and strictly positive\n";
+            abort();
+        }
 #ifdef BSEEMP
         assert(trackmode>0);
 #endif
@@ -1532,6 +1538,7 @@ public:
                 _star2.tphys = tphysf;
                 _out1.dm = _star1.mt - mass_initial1;
                 _out2.dm = _star2.mt - mass_initial2;
+                _bse_event.setEventIndexEnd(0);
                 return 0;
             }
             if (_star1.kw==15) {
@@ -1757,7 +1764,19 @@ public:
         // ===================== BHMERGER-ZJ: remnant calculation hook end =====================
 #endif
 
-        merge_(kw, m0, mt, r, mc, rc, menv, renv, ospin, age, &semi_rsun, &_ecc, vkick, zpars);
+        double lum[2], tm[2];
+        merge_structure_(kw, m0, mt, r, mc, rc, menv, renv, ospin, age,
+                         &semi_rsun, &_ecc, vkick, zpars, lum, tm);
+#ifdef BHMERGER_INTERFACE_LINKED
+        if (remnant_zj_success && kw[0]==14 && mt[0]>0.0 && mt[1]==0.0) {
+            // BH hrdiag structure must follow the fitted remnant mass too.
+            const double fitted_mass=remnant_zj.mfin*total_mass_before_merge;
+            const double ratio=mt[0]/fitted_mass;
+            ospin[0]*=ratio*ratio*ratio;
+            mt[0]=mc[0]=fitted_mass;
+            r[0]=rc[0]=4.24e-6*fitted_mass;
+        }
+#endif
 
         _semi = semi_rsun/rscale;
 
@@ -1774,6 +1793,7 @@ public:
 #else
         _star1.mt = mt[0];
 #endif
+        _star1.lum = lum[0];
         _star1.r  = r[0];
         _star1.mc = mc[0];
         _star1.rc = rc[0];
@@ -1783,6 +1803,7 @@ public:
         _star2.kw = kw[1];
         _star2.m0 = m0[1];
         _star2.mt = mt[1];
+        _star2.lum = lum[1];
         _star2.r  = r[1];
         _star2.mc = mc[1];
         _star2.rc = rc[1];
@@ -1791,13 +1812,13 @@ public:
 
         _out1.menv = menv[0];
         _out1.renv = renv[0];
-        _out1.tm = 0;
+        _out1.tm = tm[0];
         _out1.dm = _star1.mt - _out1.dm;
         _out1.dtmiss = 0;
 
         _out2.menv = menv[1];
         _out2.renv = renv[1];
-        _out2.tm = 0;
+        _out2.tm = tm[1];
         _out2.dm = _star2.mt - _out2.dm;
         _out2.dtmiss = 0;
 

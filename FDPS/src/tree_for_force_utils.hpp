@@ -333,6 +333,10 @@ namespace ParticleSimulator{
                     n_ptcl_cum += tc_array[adr[j]].n_ptcl_;
                 }
                 assert(n_cnt > 0);
+                if (n_cnt<=0) {
+                    PARTICLE_SIMULATOR_PRINT_ERROR("Invalid Morton tree partition: empty child set");
+                    Abort(-1);
+                }
                 tc_array[adr[n_cnt-1]].n_ptcl_ = n_ptcl_tmp - n_ptcl_cum;
                 n_cell_new += N_CHILDREN;
             } // end of omp parallel scope
@@ -474,6 +478,10 @@ namespace ParticleSimulator{
                 for(S32 j=0; j<n_cnt-1; j++){
                     tc_array[adr[j]].n_ptcl_ = tc_array[adr[j+1]].adr_ptcl_ - tc_array[adr[j]].adr_ptcl_;
                     n_ptcl_cum += tc_array[adr[j]].n_ptcl_;
+                }
+                if (n_cnt<=0) {
+                    PARTICLE_SIMULATOR_PRINT_ERROR("Invalid Morton tree partition: empty child set");
+                    Abort(-1);
                 }
                 tc_array[adr[n_cnt-1]].n_ptcl_ = n_ptcl_tmp - n_ptcl_cum;
                 n_cell_new += N_CHILDREN;
@@ -1260,17 +1268,17 @@ namespace ParticleSimulator{
                     // debug
                     for(S32 ip=0; ip<n_child; ip++){
                         ep_list[iloc].mass = ep_first[adr_ptcl_tmp].mass;
-                        ep_list[iloc++].pos = ep_first[adr_ptcl_tmp++].pos;
+                        ep_list[iloc++].pos = ep_first[tp_first[adr_ptcl_tmp++].adr_ptcl_].pos;
                     }
                     ep_list.resizeNoInitialize(iloc);
 #else
                     for(S32 ip=0; ip<n_child; ip++){
                         if( GetMSB(tp_first[adr_ptcl_tmp].adr_ptcl_) == 0){
-                            Tep ep_tmp = ep_first[adr_ptcl_tmp++];
+                            Tep ep_tmp = ep_first[tp_first[adr_ptcl_tmp++].adr_ptcl_];
                             ep_list.pushBackNoCheck(ep_tmp);
                         }
                         else{
-                            Tsp sp_tmp = sp_first[adr_ptcl_tmp++];
+                            Tsp sp_tmp = sp_first[ClearMSB(tp_first[adr_ptcl_tmp++].adr_ptcl_)];
                             sp_list.pushBackNoCheck(sp_tmp);
                         }
                     }
@@ -1422,10 +1430,10 @@ namespace ParticleSimulator{
                     sp_list.reserveEmptyAreaAtLeast( n_child );
                     for(S32 ip=0; ip<n_child; ip++){
                         if( GetMSB(tp_first[adr_ptcl_tmp].adr_ptcl_) == 0){
-                            ep_list.pushBackNoCheck(ep_first[adr_ptcl_tmp++]);
+                            ep_list.pushBackNoCheck(ep_first[tp_first[adr_ptcl_tmp++].adr_ptcl_]);
                         }
                         else{
-                            sp_list.pushBackNoCheck(sp_first[adr_ptcl_tmp++]);
+                            sp_list.pushBackNoCheck(sp_first[ClearMSB(tp_first[adr_ptcl_tmp++].adr_ptcl_)]);
                         }
                     }
                 }
@@ -1481,11 +1489,11 @@ namespace ParticleSimulator{
                     sp_list.reserveEmptyAreaAtLeast( n_child );
                     for(S32 ip=0; ip<n_child; ip++){
                         if( GetMSB(tp_first[adr_ptcl_tmp].adr_ptcl_) == 0){
-                            ep_list.pushBackNoCheck(ep_first[adr_ptcl_tmp++]);
+                            ep_list.pushBackNoCheck(ep_first[tp_first[adr_ptcl_tmp++].adr_ptcl_]);
                         }
                         else{
                             //if(sp_first[adr_ptcl_tmp].mass == 0.0) { std::cerr<<"check a"<<std::endl; } // another node sent sp with mass of 0
-                            sp_list.pushBackNoCheck(sp_first[adr_ptcl_tmp++]);
+                            sp_list.pushBackNoCheck(sp_first[ClearMSB(tp_first[adr_ptcl_tmp++].adr_ptcl_)]);
                         }
                     }
                 }
@@ -1555,10 +1563,10 @@ namespace ParticleSimulator{
                     sp_list.reserveEmptyAreaAtLeast( n_child );
                     for(S32 ip=0; ip<n_child; ip++){
                         if( GetMSB(tp_first[adr_ptcl_tmp].adr_ptcl_) == 0){
-                            ep_list.pushBackNoCheck(ep_first[adr_ptcl_tmp++]);
+                            ep_list.pushBackNoCheck(ep_first[tp_first[adr_ptcl_tmp++].adr_ptcl_]);
                         }
                         else{
-                            sp_list.pushBackNoCheck(sp_first[adr_ptcl_tmp++]);
+                            sp_list.pushBackNoCheck(sp_first[ClearMSB(tp_first[adr_ptcl_tmp++].adr_ptcl_)]);
                         }
                     }
                 }
@@ -1606,9 +1614,9 @@ namespace ParticleSimulator{
                 else{
                     S32 adr_ptcl_tmp = tc_child->adr_ptcl_;
                     ep_list.reserveEmptyAreaAtLeast( n_child );
-                    for (S32 ip=0; ip<n_child; ip++){
+                    for (S32 ip=0; ip<n_child; ip++, adr_ptcl_tmp++){
                         if( GetMSB(tp_first[adr_ptcl_tmp].adr_ptcl_) == 0){
-                            ep_list.pushBackNoCheck(ep_first[adr_ptcl_tmp++]);
+                            ep_list.pushBackNoCheck(ep_first[tp_first[adr_ptcl_tmp].adr_ptcl_]);
                         }
                     }
                 }
@@ -2624,10 +2632,10 @@ namespace ParticleSimulator{
             sp_list.reserveEmptyAreaAtLeast( n_child );
             for(S32 ip=0; ip<n_child; ip++){
                 if( GetMSB(tp_first[adr_ptcl_tmp].adr_ptcl_) == 0){
-                    ep_list.pushBackNoCheck(ep_first[adr_ptcl_tmp++]);
+                    ep_list.pushBackNoCheck(ep_first[tp_first[adr_ptcl_tmp++].adr_ptcl_]);
                 }
                 else{
-                    sp_list.pushBackNoCheck(sp_first[adr_ptcl_tmp++]);
+                    sp_list.pushBackNoCheck(sp_first[ClearMSB(tp_first[adr_ptcl_tmp++].adr_ptcl_)]);
                 }
             }
             return n_cell_open;
@@ -2723,10 +2731,10 @@ namespace ParticleSimulator{
                         sp_list.reserveEmptyAreaAtLeast( n_child );
                         for(S32 ip=0; ip<n_child; ip++){
                             if( GetMSB(tp_first[adr_ptcl_tmp].adr_ptcl_) == 0){
-                                ep_list.pushBackNoCheck(ep_first[adr_ptcl_tmp++]);
+                                ep_list.pushBackNoCheck(ep_first[tp_first[adr_ptcl_tmp++].adr_ptcl_]);
                             }
                             else{
-                                sp_list.pushBackNoCheck(sp_first[adr_ptcl_tmp++]);
+                                sp_list.pushBackNoCheck(sp_first[ClearMSB(tp_first[adr_ptcl_tmp++].adr_ptcl_)]);
                             }
                         }
                     }
@@ -2774,10 +2782,10 @@ namespace ParticleSimulator{
                 sp_list.reserveEmptyAreaAtLeast( n_child );
                 for(S32 ip=0; ip<n_child; ip++, adr_ptcl_tmp++){
                     if( GetMSB(tp_first[adr_ptcl_tmp].adr_ptcl_) == 0){
-                        ep_list.pushBackNoCheck(ep_first[adr_ptcl_tmp]);
+                        ep_list.pushBackNoCheck(ep_first[tp_first[adr_ptcl_tmp].adr_ptcl_]);
                     }
                     else{
-                        sp_list.pushBackNoCheck(sp_first[adr_ptcl_tmp]);
+                        sp_list.pushBackNoCheck(sp_first[ClearMSB(tp_first[adr_ptcl_tmp].adr_ptcl_)]);
                     }
                 }
             }

@@ -18,6 +18,40 @@ if (( tls_bytes > 1048576 )); then
     exit 1
 fi
 timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/integration"
-g++ -std=c++17 -g -O1 -I/usr/include/python3.11 -I/usr/lib/python3/dist-packages/numpy/core/include PeTar_new_version/test/bugfix/python_bridge.cxx -lpython3.11 -o "$output/python_bridge"
+g++ -std=c++17 -g -O1 "-DPETAR_PRECESSION_SOURCE_DIR=\"$repo/PeTar_new_version/bhmerger/precession-master\"" -I/usr/include/python3.11 -I/usr/lib/python3/dist-packages/numpy/core/include PeTar_new_version/test/bugfix/python_bridge.cxx -lpython3.11 -o "$output/python_bridge"
 timeout 60s "$output/python_bridge"
+timeout 60s "$output/python_bridge" --host
+(cd /tmp && timeout 60s "$output/python_bridge" --import-only)
 timeout 60s python3 PeTar_new_version/test/bugfix/precession_sign.py
+
+# Trap invalid arithmetic in the actual production Fortran routines.
+gfortran -g -O0 -ffpe-trap=invalid,zero,overflow -fcheck=all \
+    PeTar_new_version/test/bugfix/sn_kick.f90 \
+    PeTar_new_version/bse-interface/bse/kick.f \
+    PeTar_new_version/bse-interface/bse/hrdiag.f \
+    PeTar_new_version/bse-interface/libbse.a -o "$output/sn_kick"
+timeout 60s "$output/sn_kick"
+
+g++ -std=c++17 "${san[@]}" -DBSEBBF -DBSE_BASE \
+    -I PeTar_new_version/bse-interface \
+    PeTar_new_version/test/bugfix/stellar_merge.cxx \
+    PeTar_new_version/bse-interface/libbse.a -lgfortran -o "$output/stellar_merge"
+timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/stellar_merge"
+g++ -std=c++17 "${san[@]}" -fopenmp -DAR_TTL -DAR_SLOWDOWN_ARRAY \
+    -DAR_SLOWDOWN_TIMESCALE -DHARD_CHECK_ENERGY "${inc[@]}" \
+    PeTar_new_version/test/bugfix/array_merger.cxx -o "$output/array_merger"
+timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/array_merger"
+
+for variant in default KDKDK_4TH; do
+    flags=()
+    if [[ "$variant" != default ]]; then flags+=("-D$variant"); fi
+    g++ -std=c++17 "${san[@]}" "${flags[@]}" "${inc[@]}" \
+        PeTar_new_version/test/bugfix/kickdrift.cxx -o "$output/kickdrift-$variant"
+    env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/kickdrift-$variant"
+done
+g++ -std=c++17 "${san[@]}" -DBHMERGER "${inc[@]}" \
+    PeTar_new_version/test/bugfix/merger_log.cxx -Wl,--wrap=write -o "$output/merger_log"
+env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/merger_log"
+g++ -std=c++17 "${san[@]}" -DINTEGRATED_CUTOFF_FUNCTION -DHARD_CHECK_ENERGY \
+    "${inc[@]}" PeTar_new_version/test/bugfix/cm_prediction.cxx -o "$output/cm_prediction"
+env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/cm_prediction"

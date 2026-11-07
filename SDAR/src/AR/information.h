@@ -298,6 +298,29 @@ namespace AR {
                     binarytree[ilast].vel[2] = binarytree[ilast-1].vel[2];
                 }
             }
+            // Zero-mass leaves are bookkeeping nodes, not Kepler binaries.
+            // Keep the positive-mass subtree; never reuse orbital cache values.
+            for (int i=0; i<binarytree.getSize(); ++i) {
+                auto& node=binarytree[i];
+                auto* left=node.getMember(0);
+                auto* right=node.getMember(1);
+                if (left->mass>0.0 && right->mass>0.0) continue;
+                static_cast<COMM::Binary&>(node)=COMM::Binary{};
+                node.m1=left->mass; node.m2=right->mass;
+                node.mass=node.m1+node.m2;
+                Float distance_sq=0.0;
+                for (int k=0; k<3; ++k) {
+                    const Float dr=right->pos[k]-left->pos[k];
+                    distance_sq+=dr*dr;
+                    const Float w=node.mass>0.0 ? node.m1/node.mass : 0.5;
+                    node.pos[k]=w*left->pos[k]+(1.0-w)*right->pos[k];
+                    node.vel[k]=w*left->vel[k]+(1.0-w)*right->vel[k];
+                }
+                node.r=sqrt(distance_sq);
+                node.stab=NUMERIC_FLOAT_MAX;
+                node.stab_check_time=0.0;
+            }
+
         }
 
         //! check binary tree member pair id, if consisent, return ture. otherwise set the member pair id

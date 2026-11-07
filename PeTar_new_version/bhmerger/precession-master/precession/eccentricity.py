@@ -3,6 +3,7 @@ import inspect
 import functools
 import re
 import precession
+from .precession import _arccos_roundoff
 import numpy as np
 import scipy.optimize
 import scipy.integrate
@@ -659,7 +660,7 @@ def rhs_orbav(allvars, a, q, m1, m2, eta, chi1, chi2, S1, S2, PNorderpre=[0,0.5]
 
     c2phi1=2*cphi1**2-1
     c2phi2=2*cphi2**2-1
-    c2phi=np.cos(2*(np.arccos(cphi1)+np.arccos(cphi2)))
+    c2phi=np.cos(2*(_arccos_roundoff(cphi1)+_arccos_roundoff(cphi2)))
   
 
    

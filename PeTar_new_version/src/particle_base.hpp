@@ -36,11 +36,12 @@ public:
     PS::F64 time_interrupt;
 #ifdef BHMERGER
     PS::F64 time_merger=-1.0;//merger time=-1  by zhujie
-    // Osculating orbit used for the saved merger deadline.  These let the
-    // callback distinguish harmless phase advance from a real perturbation.
+    // Dynamical checkpoint, independent of the absolute merger deadline.
+    // Internal dissipative updates move this checkpoint without restarting the clock.
     PS::F64 merger_semi=-1.0;
     PS::F64 merger_ecc=-1.0;
-    PS::F64 merger_record_time=-1.0; // epoch of cached prediction orbit
+    PS::F64 merger_record_time=-1.0; // epoch of dynamical checkpoint
+    PS::F64 merger_dyn_log_tgw=0.0; // accumulated dynamics-only log lifetime ratio
     PS::F64vec spin;
 #endif
 #ifdef BSE_BASE
@@ -94,6 +95,7 @@ public:
         merger_semi = -1.0;
         merger_ecc = -1.0;
         merger_record_time = -1.0;
+        merger_dyn_log_tgw = 0.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -119,6 +121,7 @@ public:
         merger_semi = -1.0;
         merger_ecc = -1.0;
         merger_record_time = -1.0;
+        merger_dyn_log_tgw = 0.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -143,6 +146,7 @@ public:
         merger_semi = -1.0;
         merger_ecc = -1.0;
         merger_record_time = -1.0;
+        merger_dyn_log_tgw = 0.0;
         spin.x = 0.0;
         spin.y = 0.0;
         spin.z = 0.0;
@@ -432,6 +436,7 @@ public:
         merger_semi = din.merger_semi;
         merger_ecc = din.merger_ecc;
         merger_record_time = din.merger_record_time;
+        merger_dyn_log_tgw = din.merger_dyn_log_tgw;
         spin = din.spin;
 #endif
 #ifdef BSE_BASE

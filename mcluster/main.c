@@ -37,6 +37,9 @@
  ***************************************************************************/
 
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include<stdio.h>
 #include<fenv.h>
 #include<stdlib.h>
@@ -65,7 +68,16 @@
 #include "fast_potential.h"
 #endif
 
+static FILE* open_output_file(const char* path) {
+    FILE* file=fopen(path,"w");
+    if (!file) { perror(path); exit(EXIT_FAILURE); }
+    return file;
+}
+
 int main (int argv, char **argc) {
+#ifdef SSE
+    instar_(); // Initialize the existing BSE collision-type matrix once.
+#endif
 
 #ifdef DARKMATTER
     DMOptions dm = {0};
@@ -198,6 +210,7 @@ int main (int argv, char **argc) {
 	int option;
 	static struct option long_options[] = {
 		{"blackhole", no_argument, 0, 1000},
+        {"check-energy", no_argument, 0, 1001},
 #ifdef DARKMATTER
         {"dm-nfw", no_argument, 0, 1100},
         {"dm-number", required_argument, 0, 1101},
@@ -213,6 +226,7 @@ int main (int argv, char **argc) {
 	while ((option = getopt_long(argv, argc, "N:M:P:W:R:r:c:g:S:D:T:Q:C:A:O:G:o:f:a:m:B:b:p:s:t:e:Z:X:x:V:u:h?", long_options, NULL)) != -1) switch (option)
 	{
 		case 1000: blackhole = 1; break;
+        case 1001: check = 1; break;
 #ifdef DARKMATTER
         case 1100: dm.enabled = 1; break;
         case 1101: dm.number = dm_integer(optarg); dm.specified = 1; break;
@@ -316,11 +330,11 @@ int main (int argv, char **argc) {
             break;
 		case 'f':
             mfunc = atoi(optarg);
-            if (mfunc >= 0 && mfunc <= 2)
+            if (mfunc >= 0 && mfunc <= 4)
                 break;
             else {
                 printf("\nError: Mass function (f) needs to "
-                    "be between 0 and 2, %d was given\n", mfunc);
+                    "be between 0 and 4, %d was given\n", mfunc);
                 exit(1);
             }
 		case 'a' :
@@ -596,7 +610,7 @@ int main (int argv, char **argc) {
 			single_mass = mlim[0];
 			printf("\nSetting stellar masses to %g solar mass\n",single_mass);
 			if (!N) N = Mcl/single_mass;
-			for (j=0;j<N;j++) star[j][0] = 1.0/N;
+			for (j=0;j<N;j++) { star[j][0]=single_mass; star[j][7]=single_mass; }
 			mmean = single_mass;
 			M = N*mmean;
 			printf("\nM = %g\n", M);
@@ -1264,7 +1278,7 @@ int main (int argv, char **argc) {
 			for (j=0; j<N; j++) {
 			ekin += star[j][0]*((star[j][4]*star[j][4])+(star[j][5]*star[j][5])+(star[j][6]*star[j][6]));
 			if (j) {
-				for (i=0;i<j-1;i++) 
+				for (i=0;i<j;i++)
 					epot -= star[i][0]*star[j][0]/sqrt((star[i][1]-star[j][1])*(star[i][1]-star[j][1])+(star[i][2]-star[j][2])*(star[i][2]-star[j][2])+(star[i][3]-star[j][3])*(star[i][3]-star[j][3]));
 			}
 			sigma += star[j][4]*star[j][4]+star[j][5]*star[j][5]+star[j][6]*star[j][6];
@@ -1341,13 +1355,13 @@ int generate_m1(int *N, double **star, double mlow, double mup, double *M, doubl
 	int lostremnants = 0; //number of ejected compact remnants
 	double lostremnantsmass = 0.0; //mass of ejected compact remnants
 	if (Mcl && remnant && (Rh != -1)) {
-		vesc = sqrt(2.0*G*Mcl/Rh);
+		vesc = PC_MYR_TO_KMS*sqrt(2.0*G*Mcl/Rh);
 		printf("Escape velocity of cluster = %.4f km/s\n", vesc);
 	} else if ((!remnant) || (Rh == -1)) {
 		vesc = 1.0E10;
 		printf("Keeping all compact remnants\n");
 	} else {
-		vesc = sqrt(2.0*0.4**N/Rh);
+		vesc = PC_MYR_TO_KMS*sqrt(2.0*G*0.4*(*N)/Rh);
 		printf("Estimated escape velocity of cluster assuming mean stellar mass of 0.4 Msun = %.4f km/s\n", vesc);
 	}
 	for (i=0; i<20; i++) zpars[i] = 0;
@@ -1480,13 +1494,13 @@ int generate_m2(int an, double *mlim, double *alpha, double Mcl, double M_tmp, d
 	int lostremnants = 0; //number of ejected compact remnants
 	double lostremnantsmass = 0.0; //mass of ejected compact remnants
 	if (Mcl && remnant && (Rh != -1)) {
-		vesc = sqrt(2.0*G*Mcl/Rh);
+		vesc = PC_MYR_TO_KMS*sqrt(2.0*G*Mcl/Rh);
 		printf("Escape velocity of cluster = %.4f km/s\n", vesc);
 	} else if ((!remnant) || (Rh == -1)) {
 		vesc = 1.0E10;
 		printf("Keeping all compact remnants\n");
 	} else {
-		vesc = sqrt(2.0*0.4**N/Rh);
+		vesc = PC_MYR_TO_KMS*sqrt(2.0*G*0.4*(*N)/Rh);
 		printf("Estimated escape velocity of cluster assuming mean stellar mass of 0.4 Msun = %.4f km/s\n", vesc);
 	}
 	
@@ -1538,7 +1552,7 @@ int generate_m2(int an, double *mlim, double *alpha, double Mcl, double M_tmp, d
 			epoch1 = 0.0;
 			//printf("MASS %.2f", mass);
 			star[i][7] = mass;
-			if (epoch) evolv1_(&kw, &mass, &mt, &r, &lum, &mc, &rc, &menv, &renv, &ospin, &epoch1, &tms, &tphys, &tphysf, &dtp, &z, zpars, &vkick);
+			evolv1_(&kw, &mass, &mt, &r, &lum, &mc, &rc, &menv, &renv, &ospin, &epoch1, &tms, &tphys, &tphysf, &dtp, &z, zpars, &vkick);
 			//printf("-> %.2f\n", mass);
 			//printf("KICK: %.5f\n", vkick);
 			lostremnants++;
@@ -1730,13 +1744,13 @@ int generate_m4(int *N, double **star, double alpha, double beta, double mu,  do
 	mth = mu*(1.0-beta)*(B_u - B_l)/(G_u - G_l) ;
 	
 	if (Mcl && remnant && (Rh != -1)) {
-		vesc = sqrt(2.0*G*Mcl/Rh);
+		vesc = PC_MYR_TO_KMS*sqrt(2.0*G*Mcl/Rh);
 		printf("Escape velocity of cluster = %.4f km/s\n", vesc);
 	} else if ((!remnant) || (Rh == -1)) {
 		vesc = 1.0E10;
 		printf("Keeping all compact remnants\n");
 	} else {
-		vesc = sqrt(2.0*0.4**N/Rh);
+		vesc = PC_MYR_TO_KMS*sqrt(2.0*G*0.4*(*N)/Rh);
 		printf("Estimated escape velocity of cluster assuming mean stellar mass of 0.4 Msun = %.4f km/s\n", vesc);
 	}
 	for (i=0; i<20; i++) zpars[i] = 0;
@@ -3631,7 +3645,9 @@ double fractalize(double D, int N, double **star, int radial, int symmetry) {
 			vnorm += sqrt(pow(star[i][4],2)+pow(star[i][5],2)+pow(star[i][6],2));
 		}
 		vnorm /= N;
-		for (h=4;h<7;h++) star[i][h] /= 0.5*vnorm;
+        if (vnorm>0.0)
+            for (i=0;i<N;i++)
+                for (h=4;h<7;h++) star[i][h] /= 0.5*vnorm;
 		
 		for (i=0;i<N;i++) {
 			r = sqrt(pow(star[i][1],2)+pow(star[i][2],2)+pow(star[i][3],2));
@@ -3666,7 +3682,7 @@ int get_binaries(int nbin, double **star, double M, double rvir, int pairing, in
 
 	double vesc;
 	if (remnant) {
-		vesc = sqrt(2.0*G*M/Rh);
+		vesc = PC_MYR_TO_KMS*sqrt(2.0*G*M/Rh);
 		if (BSE) printf("Keeping only binaries with kick velocities < escape velocity\n");
 	} else {
 		vesc = 1.0E10;
@@ -3681,8 +3697,15 @@ int get_binaries(int nbin, double **star, double M, double rvir, int pairing, in
 	
 	
 	for (i=0; i < nbin; i++) {
-
+        double initial_binary_state[2][15];
+        for (int component=0; component<2; ++component)
+            memcpy(initial_binary_state[component],star[2*i+component],
+                   sizeof(initial_binary_state[component]));
 		do {
+            // Rejected kicks must not shift the centre of the next draw.
+            for (int component=0; component<2; ++component)
+                memcpy(star[2*i+component],initial_binary_state[component],
+                       sizeof(initial_binary_state[component]));
 
 			//Specify component masses
 			if (BSE) {
@@ -3860,14 +3883,14 @@ int get_binaries(int nbin, double **star, double M, double rvir, int pairing, in
 			
 				abin *= rvir; //pc
 				abin *= 206264.806; //AU
-				P = sqrt(pow(abin, 3.0)/(m1+m2));//yr
+				P = sqrt(pow(abin, 3.0)/(mass[0]+mass[1]));//yr; masses in Msun
 				P *= 365.25;//days
 			
 				evolv2_(kw,mass,mt,r,lum,mc,rc,menv,renv,ospin,epoch1,tms,&tphys,&tphysf,&dtp,&z,zpars,&P,&eccold, vkick);
 
 				P /= 365.25;//yr
 			
-				abin = pow((m1+m2)*P*P,(1.0/3.0));//AU
+				abin = cbrt((mt[0]+mt[1])*P*P);//AU; evolved masses in Msun
 				abin /= 206264.806;//pc
 				abin /= rvir;//Nbody units			
 			
@@ -3924,7 +3947,7 @@ int get_binaries(int nbin, double **star, double M, double rvir, int pairing, in
 			star[2*i][0] = m1;
 			star[2*i+1][0] = m2;
 
-		} while ((sqrt(vkick[0]) > vesc) && (sqrt(vkick[1]) > vesc));
+		} while ((vkick[0] > vesc) || (vkick[1] > vesc));
 
 		//printf("%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\t%lf\n", m1/(m1+m2)*rrel[0], m1/(m1+m2)*rrel[1], m1/(m1+m2)*rrel[2], m1/(m1+m2)*vrel[0], m1/(m1+m2)*vrel[1], m1/(m1+m2)*vrel[2], -m2/(m1+m2)*rrel[0], -m2/(m1+m2)*rrel[1], -m2/(m1+m2)*rrel[2], -m2/(m1+m2)*vrel[0], -m2/(m1+m2)*vrel[1], -m2/(m1+m2)*vrel[2]);
 		//printf("%i\t%.10lf\t%.10lf\t%.10lf\t%.10lf\t%.10lf\t%.10lf\t%.10lf\t%.10lf\t%.10lf\n",i,m1*M, m2*M, P, abin*rvir, ecc, m1old*M, m2old*M, abinold*rvir, eccold);
@@ -4856,18 +4879,18 @@ int cmd(double **star, int l, double Rgal, double *abvmag, double *vmag, double 
 int output0(char *output, int N, int NNBMAX, double RS0, double dtadj, double dtout, double tcrit, double rvir, double mmean, int tf, int regupdate, int etaupdate, int mloss, int bin, int esc, double M, double mlow, double mup, double MMAX, double epoch, double dtplot, double Z, int nbin, double Q, double *RG, double *VG, double rtide, int gpu, double **star, int sse, int seed, double extmass, double extrad, double extdecay, double extstart){
 
 	//Open output files
-	char *PARfile, *NBODYfile, *SSEfile;
+	char PARfile[strlen(output)+16], NBODYfile[strlen(output)+16], SSEfile[strlen(output)+16];
 	FILE *PAR, *NBODY, *SSE12;
-	PARfile = strcat(output,".input");
-	PAR = fopen(PARfile,"w");
-	NBODYfile = strcat(output,".fort.10");
-	NBODY = fopen(NBODYfile,"w");
+	snprintf(PARfile,sizeof(PARfile),"%s.input",output);
+	PAR = open_output_file(PARfile);
+	snprintf(NBODYfile,sizeof(NBODYfile),"%s.fort.10",output);
+	NBODY = open_output_file(NBODYfile);
 
 	int hrplot = 0;
 	if (dtplot) hrplot = 1;
 	if (sse) {
-		SSEfile = strcat(output,".fort.12");
-		SSE12 = fopen(SSEfile,"w");
+		snprintf(SSEfile,sizeof(SSEfile),"%s.fort.12",output);
+		SSE12 = open_output_file(SSEfile);
 		hrplot = 2;
 	}		
 	
@@ -4928,12 +4951,12 @@ int output0(char *output, int N, int NNBMAX, double RS0, double dtadj, double dt
 int output1(char *output, int N, double dtadj, double dtout, double tcrit, double rvir, double mmean, int tf, int regupdate, int etaupdate, int mloss, int bin, int esc, double M, double mlow, double mup, double MMAX, double epoch, double Z, int nbin, double Q, double *RG, double *VG, double rtide, int gpu, double **star){
 
 	//Open output files
-	char *PARfile, *NBODYfile;
+	char PARfile[strlen(output)+16], NBODYfile[strlen(output)+16];
 	FILE *PAR, *NBODY;
-	PARfile = strcat(output,".PAR");
-	PAR = fopen(PARfile,"w");
-	NBODYfile = strcat(output,".NBODY");
-	NBODY = fopen(NBODYfile,"w");
+	snprintf(PARfile,sizeof(PARfile),"%s.PAR",output);
+	PAR = open_output_file(PARfile);
+	snprintf(NBODYfile,sizeof(NBODYfile),"%s.NBODY",output);
+	NBODY = open_output_file(NBODYfile);
 	
 	//write to .PAR file	
 	fprintf(PAR,"1 5000000.0 0\n");
@@ -4976,18 +4999,18 @@ int output1(char *output, int N, double dtadj, double dtout, double tcrit, doubl
 int output2(char *output, int N, int NNBMAX, double RS0, double dtadj, double dtout, double tcrit, double rvir, double mmean, int tf, int regupdate, int etaupdate, int mloss, int bin, int esc, double M, double mlow, double mup, double MMAX, double epoch, double dtplot, double Z, int nbin, double Q, double *RG, double *VG, double rtide, int gpu, double **star, int sse, int seed, double extmass, double extrad, double extdecay, double extstart){
 
 	//Open output files
-	char *PARfile, *NBODYfile, *SSEfile;		
+	char PARfile[strlen(output)+16], NBODYfile[strlen(output)+16], SSEfile[strlen(output)+16];
 	FILE *PAR, *NBODY, *SSE12;
-	PARfile = strcat(output,".PAR");
-	PAR = fopen(PARfile,"w");
-	NBODYfile = strcat(output,".NBODY");
-	NBODY = fopen(NBODYfile,"w");
+	snprintf(PARfile,sizeof(PARfile),"%s.PAR",output);
+	PAR = open_output_file(PARfile);
+	snprintf(NBODYfile,sizeof(NBODYfile),"%s.NBODY",output);
+	NBODY = open_output_file(NBODYfile);
 	
 	int hrplot = 0;
 	if (dtplot) hrplot = 1;
 	if (sse) {
-		SSEfile = strcat(output,".fort.12");
-		SSE12 = fopen(SSEfile,"w");
+		snprintf(SSEfile,sizeof(SSEfile),"%s.fort.12",output);
+		SSE12 = open_output_file(SSEfile);
 		hrplot = 2;
 	}		
 	
@@ -5047,10 +5070,11 @@ int output2(char *output, int N, int NNBMAX, double RS0, double dtadj, double dt
 
 int output3(char *output, int N, double rvir, double rh, double mmean, double M, double epoch, double Z, double *RG, double *VG, double rtide, double **star, double Rgal, double extmass, double extrad){
 	//Open output files
-	char *tablefile = strcat(output,".txt");
+	char tablefile[strlen(output)+16];
+    snprintf(tablefile,sizeof(tablefile),"%s.txt",output);
 	FILE *TABLE;
 	
-	TABLE = fopen(tablefile,"w");
+	TABLE = open_output_file(tablefile);
 	
 	//write to .txt file
 	int i, j;
@@ -5126,18 +5150,18 @@ int output3(char *output, int N, double rvir, double rh, double mmean, double M,
 int output4(char *output, int N, int NNBMAX, double RS0, double dtadj, double dtout, double tcrit, double rvir, double mmean, int tf, int regupdate, int etaupdate, int mloss, int bin, int esc, double M, double mlow, double mup, double MMAX, double epoch, double dtplot, double Z, int nbin, double Q, double *RG, double *VG, double rtide, int gpu, double **star, int sse, int seed, double extmass, double extrad, double extdecay, double extstart){
 	
 	//Open output files
-	char PARfile[50], NBODYfile[50], SSEfile[50];		
+	char PARfile[strlen(output)+16], NBODYfile[strlen(output)+16], SSEfile[strlen(output)+16];
 	FILE *PAR, *NBODY, *SSE12;
-	sprintf(PARfile, "%s.input",output);
-	PAR = fopen(PARfile,"w");
-	sprintf(NBODYfile, "%s.fort.10",output);
-	NBODY = fopen(NBODYfile,"w");
+	snprintf(PARfile,sizeof(PARfile), "%s.input",output);
+	PAR = open_output_file(PARfile);
+	snprintf(NBODYfile,sizeof(NBODYfile), "%s.fort.10",output);
+	NBODY = open_output_file(NBODYfile);
 	
 	int hrplot = 0;
 	if (dtplot) hrplot = 1;
 	if (sse) {
-		sprintf(SSEfile, "%s.fort.12",output);
-		SSE12 = fopen(SSEfile,"w");
+		snprintf(SSEfile,sizeof(SSEfile), "%s.fort.12",output);
+		SSE12 = open_output_file(SSEfile);
 		hrplot = 2;
 	}		
     double gmin = 1e-6;
@@ -5201,18 +5225,18 @@ int output4(char *output, int N, int NNBMAX, double RS0, double dtadj, double dt
 int output5(char *output, int N, int NNBMAX, double RS0, double dtadj, double dtout, double tcritp, double tcrit, double rvir, double mmean, int tf, int regupdate, int etaupdate, int mloss, int bin, int esc, double M, double mlow, double mup, double MMAX, double epoch, double dtplot, double Z, int nbin, double Q, double *RG, double *VG, double rtide, int gpu, double **star, int sse, int seed, double extmass, double extrad, double extdecay, double extstart){
 
 	//Open output files
-	char PARfile[50], NBODYfile[50], SSEfile[50];		
+	char PARfile[strlen(output)+16], NBODYfile[strlen(output)+16], SSEfile[strlen(output)+16];
 	FILE *PAR, *NBODY, *SSE12;
-	sprintf(PARfile, "%s.input",output);
-	PAR = fopen(PARfile,"w");
-	sprintf(NBODYfile, "%s.dat.10",output);
-	NBODY = fopen(NBODYfile,"w");
+	snprintf(PARfile,sizeof(PARfile), "%s.input",output);
+	PAR = open_output_file(PARfile);
+	snprintf(NBODYfile,sizeof(NBODYfile), "%s.dat.10",output);
+	NBODY = open_output_file(NBODYfile);
 	
 	int hrplot = 0;
 	if (dtplot) hrplot = 1;
 	if (sse) {
-		sprintf(SSEfile, "%s.fort.12",output);
-		SSE12 = fopen(SSEfile,"w");
+		snprintf(SSEfile,sizeof(SSEfile), "%s.fort.12",output);
+		SSE12 = open_output_file(SSEfile);
 		hrplot = 2;
 	}		
     double gmin = 1e-6;
@@ -5276,10 +5300,10 @@ int output5(char *output, int N, int NNBMAX, double RS0, double dtadj, double dt
 
 void info(char *output, int N, double Mcl, int profile, double W0, double S, double D, double Q, double Rh, double gamma[], double a, double Rmax, double tcrit, int tf, double RG[], double VG[], int mfunc, double single_mass, double mlow, double mup, double alpha[], double mlim[], double alpha_L3, double beta_L3, double mu_L3, int weidner, int mloss, int remnant, double epoch, double Z, int prantzos, int nbin, double fbin, int pairing, double msort, int adis, double amin, double amax, int eigen, int BSE, double extmass, double extrad, double extdecay, double extstart, int code, int seed, double dtadj, double dtout, double dtplot, int gpu, int regupdate, int etaupdate, int esc, int units, int match, int symmetry, int OBperiods) {
 	int i;
-	char INFOfile[50];		
+	char INFOfile[strlen(output)+16];
 	FILE *INFO;
-	sprintf(INFOfile, "%s.info",output);
-	INFO = fopen(INFOfile,"w");
+	snprintf(INFOfile,sizeof(INFOfile), "%s.info",output);
+	INFO = open_output_file(INFOfile);
 
 	time_t timep; 
 	time(&timep);
@@ -5416,6 +5440,7 @@ void help(double msort) {
 	printf("                  3. decay time for gas expulsion [Myr], 4. delay    \n");
 	printf("                  time for start of gas expulsion [Myr])             \n");
 	printf("       -u <0|1> (output units; 0= Nbody, 1= astrophysical)           \n");
+	printf("       --check-energy (print final kinetic/potential energy check)\n");
 	printf("       -h (display this help)                                        \n");
 	printf("       -? (display this help)                                        \n");
 	printf("                                                                     \n");

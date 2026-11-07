@@ -344,8 +344,8 @@ namespace ParticleSimulator{
                 assert(getInstance().n_segment_ == (size_t)0);
                 //getInstance().cap_ = 0;
                 getInstance().size_ = 0;
-                //getInstance().bottom_ = NULL;
-                getInstance().top_ = NULL;
+                // Retain the allocation and restart at its beginning.
+                getInstance().top_ = getInstance().bottom_;
                 getInstance().n_segment_ = 0;
             }
         }

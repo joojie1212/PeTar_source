@@ -20,7 +20,7 @@ namespace ParticleSimulator{
         bool first_call_by_initialize;
         bool first_call_by_setAverageTargetNumberOfSampleParticlePerProcess;
         bool first_call_by_DomainInfo_collect_sample_particle;
-        CountT n_proc_exch_;
+        CountT n_proc_exch_ = 0;
         inline bool determineWhetherParticleIsInDomain(const F64vec & pos,
                                                        const F64ort & domain) {
             bool ret = true;
@@ -1389,10 +1389,10 @@ PS_OMP_PARALLEL_FOR
 #endif
                 for(S32 j=0; j<n_image; j++){
                     for(S32 k=0; k<n_recv; k++){
-                        pj[j*n_image+k] = pj[k];
+                        pj[j*n_recv+k] = pj[k];
                         const F64vec pos_new = pj[k].getPos() + shift[j];
-                        pj[j*n_image+k].setPos(pos_new);
-                        //pj[j*n_image+k].pos = pos_new;
+                        pj[j*n_recv+k].setPos(pos_new);
+                        //pj[j*n_recv+k].pos = pos_new;
                     }
                 }
                 pfunc_ep_ep(my_pi.getPointer(), n_loc, pj.getPointer(), n_recv*n_image, force);

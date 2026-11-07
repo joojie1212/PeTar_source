@@ -14,9 +14,12 @@
 #include "AR/symplectic_step.h"
 #include "Hermite/block_time_step.h"
 #include "particle_simulator.hpp"
+#include "matrix2.hpp"
 #include "changeover.hpp"
 #include "ptcl.hpp"
 #include "energy.hpp"
+#include "../../src/profile.hpp"
+#include "particle_distribution_generator.hpp"
 
 struct Particle {
     Float mass=1.0;
@@ -53,6 +56,33 @@ void testTrees() {
         assert(target[n-2].getMemberN()==n);
     }
 }
+void testMasslessTreeRebuild() {
+    COMM::ParticleGroup<Particle,Particle> group;
+    group.setMode(COMM::ListMode::local); group.reserveMem(4);
+    for(int i=0;i<4;++i) {
+        Particle p; p.id=i; p.pos=PS::F64vec(i,0.,0.);
+        p.vel=PS::F64vec(0.,0.1*i,0.); group.addMember(p);
+    }
+    AR::Information<Particle,Particle> info; info.reserveMem(4);
+    info.generateBinaryTree(group,1.);
+    for(int live: {2,1,0}) {
+        for(int i=0;i<4;++i) group[i].mass=i<live ? 1. : 0.;
+        for(int i=0;i<3;++i) {
+            info.binarytree[i].semi=13.; info.binarytree[i].r=13.;
+            info.binarytree[i].ecc=0.75; info.binarytree[i].stab=0.;
+        }
+        info.generateBinaryTree(group,1.);
+        auto& root=info.getBinaryTreeRoot();
+        assert(root.mass==live && root.semi==0. && root.ecc==0.);
+        assert(root.period==0. && root.stab==NUMERIC_FLOAT_MAX);
+        assert(std::isfinite(root.r) && root.r!=13.);
+        for(int i=0;i<3;++i) assert(std::isfinite(root.pos[i]));
+        if(live==2) assert(info.binarytree[0].period>0.);
+    }
+    for(int i=0;i<4;++i) group[i].pos=0.;
+    info.generateBinaryTree(group,1.);
+    assert(info.getBinaryTreeRoot().r==0.);
+}
 void testPersistence() {
     AR::Information<Particle, Particle> original, recovered;
     original.ds=0.001234567890123; original.time_offset=13.5;
@@ -87,8 +117,70 @@ void testListAndStep() {
     assert(step.calcNextDtLimit(2*small)==2*small);
     assert(step.calcNextDtLimit(1.0)==1.0);
 }
+void testNumericalAndArrayFixes() {
+    for(double e: {0.,0.3,0.5,0.9,0.99})
+        for(int i=0;i<=100;++i) {
+            const double mean=2.*std::acos(-1.)*i/100.;
+            const double u=COMM::Binary::calcEccAnomaly(mean,e);
+            assert(std::abs(u-e*std::sin(u)-mean)<1e-10);
+        }
+    for(double half: {1e-300,1.,1e300}) {
+        PS::MortonKey key; key.initialize(half,0.);
+        const auto low=key.getKey(PS::F64vec(-half,-half,-half));
+        const auto high=key.getKey(PS::F64vec(half,half,half));
+        assert(low<high);
+    }
+    PS::Matrix2<double> a(2.,3.,5.,7.), b(11.,13.,17.,19.);
+    auto c=a*b;
+    assert(c.xx==117. && c.xy==99. && c.yx==134. && c.yy==158.);
+    SysProfile timing; timing.total.time=10.; timing.total.tbar=3.;
+    assert(timing.getMax().total.time==10. && timing.getMax().total.tbar==3.);
+    assert(timing.getMin().total.time==10. && timing.getMin().total.tbar==3.);
+    SysCounts counts;
+    for (auto field: SysCounts::counters) counts.*field=7;
+    counts.clear();
+    for (auto field: SysCounts::counters) assert((counts.*field).n==0);
+    PS::TimeProfile profile;
+    assert(profile.calc_force__core__walk_tree==0.);
+    assert(profile.calc_force__core__keep_list==0.);
+    assert(profile.calc_force__core__copy_ep==0.);
+    assert(profile.calc_force__core__dispatch==0.);
+    assert(profile.calc_force__core__retrieve==0.);
+    PS::ReallocatableArray<int> values;
+    values.resizeNoInitialize(8);
+    for(int i=0;i<8;++i) values[i]=i*i;
+    values.reserve(4096);
+    assert(values.size()==8);
+    for(int i=0;i<8;++i) assert(values[i]==i*i);
+}
+void testGeneratorScalingAndSeed() {
+    double *m0,*m1; PS::F64vec *p0,*p1,*v0,*v1;
+    ParticleDistributionGenerator::makePlummerModel(1.,8,8,m0,p0,v0,-.25,0,1.);
+    for (auto factors: {std::array<double,2>{1.,3.},std::array<double,2>{2.,1.}}) {
+        const double mass=factors[0],g=factors[1];
+        ParticleDistributionGenerator::makePlummerModel(mass,8,8,m1,p1,v1,-.25*g*mass*mass,0,g);
+        for(int i=0;i<8;++i) {
+            assert(std::abs(m1[i]-mass*m0[i])<1e-14);
+            assert((p1[i]-p0[i])*(p1[i]-p0[i])<1e-24);
+            const auto delta=v1[i]-std::sqrt(g*mass)*v0[i];
+            assert(delta*delta<1e-24);
+        }
+        delete[] m1;delete[] p1;delete[] v1;
+    }
+    delete[] m0;delete[] p0;delete[] v0;
+    double total;
+    ParticleDistributionGenerator::makeKeplerDisk(total,m0,p0,v0,8,8,1.,2.,.01,.01,10.,1.,0.,1.,-1.5,7);
+    ParticleDistributionGenerator::makeKeplerDisk(total,m1,p1,v1,8,8,1.,2.,.01,.01,10.,1.,0.,1.,-1.5,7);
+    for(int i=0;i<8;++i) {
+        assert((p1[i]-p0[i])*(p1[i]-p0[i])==0.);
+        assert((v1[i]-v0[i])*(v1[i]-v0[i])==0.);
+    }
+    delete[] m0;delete[] p0;delete[] v0;
+    delete[] m1;delete[] p1;delete[] v1;
+}
+
 int main() {
-    testTrees(); testPersistence(); testListAndStep();
+    testGeneratorScalingAndSeed(); testTrees(); testMasslessTreeRebuild(); testPersistence(); testListAndStep(); testNumericalAndArrayFixes();
     ChangeOver c; c.setR(1.,2.);
     assert(std::isfinite(c.calcPotW(1.5)));
     assert(std::abs(c.calcPotW(2.0))<1e-12);

@@ -519,7 +519,7 @@ struct CalcForceEpSpQuadSimd{
                 const PS::F64 m_j = sp_j[i].getCharge();
                 const PS::F64vec pos_j = sp_j[i].getPos();
                 const PS::F64mat q = sp_j[i].quad;
-                pg.set_spj_one(i, pos_j.x, pos_j.y, pos_j.z, m_j,
+                pg.set_spj_one(i_tmp, pos_j.x, pos_j.y, pos_j.z, m_j,
                                q.xx, q.yy, q.zz, q.xy, q.yz, q.xz);
             }
             pg.run_spj(n_ip, n_jp_tmp);

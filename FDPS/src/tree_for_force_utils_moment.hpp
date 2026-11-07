@@ -573,12 +573,12 @@ PS_OMP_PARALLEL_FOR
         F64vec pos_cm_glb = 0.0;
         for(S32 i=0; i<n_ptcl; i++){
             if( GetMSB(tp[i].adr_ptcl_) == 0){
-                mass_cm_glb += ep[i].getCharge();
-                pos_cm_glb += ep[i].getCharge() * ep[i].getPos();
+                mass_cm_glb += ep[tp[i].adr_ptcl_].getCharge();
+                pos_cm_glb += ep[tp[i].adr_ptcl_].getCharge() * ep[tp[i].adr_ptcl_].getPos();
             }
             else{
-                mass_cm_glb += sp[i].getCharge();
-                pos_cm_glb += sp[i].getCharge() * sp[i].getPos();
+                mass_cm_glb += sp[ClearMSB(tp[i].adr_ptcl_)].getCharge();
+                pos_cm_glb += sp[ClearMSB(tp[i].adr_ptcl_)].getCharge() * sp[ClearMSB(tp[i].adr_ptcl_)].getPos();
             }
         }
         pos_cm_glb /= mass_cm_glb;

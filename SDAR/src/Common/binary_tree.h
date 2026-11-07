@@ -252,28 +252,28 @@ namespace COMM{
         */
         static Float calcEccAnomaly(const Float _mean_anomaly,
                                     const Float _ecc){
-            // a: semi-major axis
-            // l: mean anomaly
-            // e: eccentricity
-            // u: eccentric anomaly
-            // n: mean mortion
-            Float u0 = _mean_anomaly;
-            Float u1;
-            int loop = 0;
-            while(1){
-                loop++;
-                Float su0 = sin(u0);
-                Float cu0 = sqrt(1.0 - su0*su0);
-                //u1 = u0 - keplereq(l, e, u0)/keplereq_dot(e, u0);
-                u1 = u0 - ((u0- _ecc*su0-_mean_anomaly)/(1.0 - _ecc*cu0));
-                //if( fabs(u1-u0) < 1e-13 ){ return u1; }
-                if( fabs(u1-u0) < 1e-15 ){ return u1; }
-                else{ u0 = u1; }
-                if (loop>1e5) {
-                    std::cerr<<"Error: kepler solver cannot converge to find correct eccentricity anomaly!\n";
-                    abort();
-                }
+            if (ISNAN(_mean_anomaly) || ISINF(_mean_anomaly)
+                || !(_ecc>=0.0 && _ecc<1.0)) {
+                std::cerr << "Invalid elliptic Kepler solver input!\n";
+                abort();
             }
+            // E-M=e*sin(E) brackets the unique elliptic solution.
+            // Safeguard Newton near e=1 and stop at floating-point precision.
+            Float lower=_mean_anomaly-_ecc, upper=_mean_anomaly+_ecc;
+            Float u=_mean_anomaly;
+            const Float tolerance=ROUND_OFF_ERROR_LIMIT
+                *std::max(Float(1.0),fabs(_mean_anomaly));
+            for(int loop=0;loop<256;++loop) {
+                const Float residual=u-_ecc*sin(u)-_mean_anomaly;
+                if(fabs(residual)<=tolerance) return u;
+                if(residual>0.0) upper=u; else lower=u;
+                Float next=u-residual/(1.0-_ecc*cos(u));
+                if(!(next>lower && next<upper)) next=lower+(upper-lower)*0.5;
+                if(next==u || upper-lower<=tolerance) return next;
+                u=next;
+            }
+            std::cerr << "Kepler solver failed to converge!\n";
+            abort();
         }
 
         //! solve kepler orbit after dt
@@ -571,7 +571,7 @@ namespace COMM{
            \return maximum stability factor <1 stable; >1 unstable; =0 binary system
         */
         static Float& stableCheckIter(BinaryTreeLocal& _bin, const Float _t_crit) {
-            if (_bin.semi<0) _bin.stab=NUMERIC_FLOAT_MAX;
+            if (_bin.semi<0 || _bin.m1<=0 || _bin.m2<=0) _bin.stab=NUMERIC_FLOAT_MAX;
             else _bin.stab = 0.0;
             Float mout = _bin.mass;
 

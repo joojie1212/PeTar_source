@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <atomic>
 #include <string>
 #include "hard_ptcl.hpp"
 #include "Hermite/hermite_particle.h"
@@ -121,7 +122,7 @@ public:
         PS::F64 ptcl_st_dat[4];
         rcount = fread(ptcl_st_dat, sizeof(PS::F64),4, fp);
         if (rcount<4) {
-            std::cerr<<"Error: Data reading fails! requiring data number is 3, only obtain "<<rcount<<".\n";
+            std::cerr<<"Error: Data reading fails! requiring data number is 4, only obtain "<<rcount<<".\n";
             abort();
         }
         Ptcl::search_factor = ptcl_st_dat[0];
@@ -134,6 +135,10 @@ public:
         rcount += fread(&n_group, sizeof(PS::S32), 1, fp);
         if (rcount<2) {
             std::cerr<<"Error: Data reading fails! requiring data number is 2, only obtain "<<rcount<<".\n";
+            abort();
+        }
+        if (n_group<0 || n_arti<0) {
+            std::cerr << "Negative group/artificial count in hard dump\n";
             abort();
         }
         n_member_in_group.resizeNoInitialize(n_group);
@@ -165,12 +170,14 @@ class HardDumpList{
 public:
     int size;
     int mpi_rank;
-    int dump_number;
+    std::atomic<int> dump_number;
     HardDump* hard_dump;
 
     HardDumpList(): size(0), mpi_rank(0), dump_number(0), hard_dump(NULL) {}
 
     void initial(const int _nthread, const int _rank=0) {
+        if (_nthread<=0) { std::cerr << "Invalid dump thread count\n"; abort(); }
+        clear();
         size = _nthread;
         mpi_rank = _rank;
         hard_dump = new HardDump[_nthread];
@@ -203,6 +210,10 @@ public:
 
     void dumpThread(const char *filename){
         const PS::S32 ith = PS::Comm::getThreadNum();
+        if (ith<0 || ith>=size || hard_dump==nullptr) {
+            std::cerr << "Hard dump is not initialized for this thread\n";
+            abort();
+        }
         std::string point(".");
         std::time_t tnow = std::time(nullptr);
         //std::tm *local_time = localtime(&tnow);
@@ -214,12 +225,12 @@ public:
     }
 
     HardDump& operator [] (const int i) {
-        assert(i<size);
+        assert(i>=0 && i<size);
         return hard_dump[i];
     }
 };
 
-static HardDumpList hard_dump;
+inline HardDumpList hard_dump;
 
 #ifdef HARD_DUMP
 #define DATADUMP(expr) hard_dump.dumpThread(expr)
@@ -229,11 +240,11 @@ static HardDumpList hard_dump;
 
 #ifdef HARD_DEBUG
 #define ASSERT(expr)                                                    \
-    if(!(expr)) {                                                       \
+    do { if(!(expr)) {                                                       \
         std::cerr<<"Assertion! "<<__FILE__<<":"<<__LINE__<<": ("<<#expr<<") fail!"<<std::endl; \
         DATADUMP("hard_dump");                                          \
         abort();                                                        \
-    }
+    } } while (0)
 #else
 #define ASSERT(expr)
 #endif

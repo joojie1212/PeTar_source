@@ -1342,6 +1342,7 @@ namespace AR {
                     check=updateBinarySemiEccPeriodIter(*bink, _G, _time, _check);
                 }
             }
+            if (_bin.m1<=0.0 || _bin.m2<=0.0) return check;
             if ((_time>_bin.stab_check_time&&_bin.stab>1.0&&_bin.m1>0.0&&_bin.m2>0.0)||check) {
                 _bin.calcSemiEccPeriod(_G);
                 _bin.stab_check_time = _time + _bin.period;
@@ -2360,10 +2361,16 @@ namespace AR {
                                     if (count_mass==1) {
                                         ASSERT(index_mass_last<n_particle&&index_mass_last>=0);
                                         auto& p = particles[index_mass_last];
-                                        Float dt = _time_end - time_;
-                                        p.pos[0] += dt * p.vel[0];
-                                        p.pos[1] += dt * p.vel[1];
-                                        p.pos[2] += dt * p.vel[2];
+                                        const Float dt = _time_end - time_;
+#ifdef AR_SLOWDOWN_ARRAY
+                                        const Float dt_drift = dt /
+                                            binary_slowdown[0]->slowdown.getSlowDownFactor();
+#else
+                                        const Float dt_drift = dt;
+#endif
+                                        p.pos[0] += dt_drift * p.vel[0];
+                                        p.pos[1] += dt_drift * p.vel[1];
+                                        p.pos[2] += dt_drift * p.vel[2];
 
                                         // cumulative step count 
                                         profile.step_count = step_count;
@@ -2466,6 +2473,7 @@ namespace AR {
                 }
 
                 // get real time 
+                const Float step_start_time = time_;
                 Float dt = time_;
 
                 // integrate one step
@@ -2879,8 +2887,8 @@ namespace AR {
                         if(_time_end<time_table[k]) break;
                     }
                     if (i==0) { // first step case
-                        ASSERT(time_table[k]>0.0);
-                        ds[ds_switch] *= manager->step.getSortCumSumCK(i)*_time_end/time_table[k];
+                        ASSERT(time_table[k]>step_start_time);
+                        ds[ds_switch] *= manager->step.getSortCumSumCK(i)*(_time_end-step_start_time)/(time_table[k]-step_start_time);
                         ds[1-ds_switch] = ds[ds_switch];
                         ASSERT(!ISINF(ds[ds_switch]));
 #ifdef AR_DEEP_DEBUG

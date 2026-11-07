@@ -595,10 +595,21 @@ namespace  ParticleSimulator{
 	    rank_glb_tmp = GetRankGlb(rank_vec_tmp, n_domain);
 	}
 
+        S32 rank_axis_tmp = GetRank1d(rank_glb_tmp, n_domain, cid);
 	while( pos_1d < domain[rank_glb_tmp].low_[cid] ){
+            if (rank_axis_tmp==0) {
+                PARTICLE_SIMULATOR_PRINT_ERROR("Particle below domain bounds in CalcRank1D");
+                Abort(-1);
+            }
+            --rank_axis_tmp;
 	    rank_glb_tmp -= shift;
 	}
 	while( pos_1d >= domain[rank_glb_tmp].high_[cid] ){
+            if (rank_axis_tmp==n_domain[cid]-1) {
+                PARTICLE_SIMULATOR_PRINT_ERROR("Particle above domain bounds in CalcRank1D");
+                Abort(-1);
+            }
+            ++rank_axis_tmp;
 	    rank_glb_tmp += shift;
 	}
 

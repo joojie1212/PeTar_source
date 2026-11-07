@@ -3,6 +3,8 @@
 #ifdef BHMERGER
 
 #include <cerrno>
+#include <cstdio>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <iomanip>
 #include <sstream>
@@ -27,9 +29,9 @@ private:
 
     static bool writeLocked(const std::string& _filename,
                             const std::string& _content,
-                            const bool _truncate) {
-        const int flags = O_WRONLY | O_CREAT
-                        | (_truncate ? O_TRUNC : O_APPEND);
+                            const bool _truncate,
+                            const bool _only_empty = false) {
+        const int flags = O_WRONLY | O_CREAT | O_APPEND;
         const int fd = ::open(_filename.c_str(), flags, 0666);
         if (fd < 0) return false;
 
@@ -47,6 +49,16 @@ private:
             }
         }
 
+        struct stat info;
+        if (::fstat(fd, &info)<0 || (_truncate && ::ftruncate(fd,0)<0)) {
+            ::close(fd);
+            return false;
+        }
+        if (_only_empty && info.st_size>0) {
+            ::close(fd);
+            return true;
+        }
+        const off_t original_size = _truncate ? 0 : info.st_size;
         const char* data = _content.data();
         std::size_t remaining = _content.size();
         bool success = true;
@@ -65,9 +77,14 @@ private:
             }
         }
 
+        if (!success && S_ISREG(info.st_mode)) {
+            // Keep the lock while rolling back an incomplete row.
+            if (::ftruncate(fd, original_size)<0)
+                std::fprintf(stderr, "Cannot roll back partial merger log row in %s\n", _filename.c_str());
+        }
         lock.l_type = F_UNLCK;
         while (::fcntl(fd, F_SETLK, &lock) < 0 && errno == EINTR) {}
-        ::close(fd);
+        if (::close(fd)<0) success=false;
         return success;
     }
 
@@ -134,7 +151,7 @@ public:
 
         // Rank 0 alone creates a fresh file and writes its header. The caller
         // performs an MPI barrier before merger integration starts.
-        if (!_append && _initialize_file) {
+        if (_initialize_file) {
             std::ostringstream header;
             header << std::setw(_width) << "time";
             writeParticleTitle(header, "before1", _width);
@@ -143,7 +160,7 @@ public:
                    << std::setw(_width) << "binary.semi";
             writeParticleTitle(header, "remnant", _width);
             header << '\n';
-            enabled_ = writeLocked(filename_, header.str(), true);
+            enabled_ = writeLocked(filename_, header.str(), !_append, _append);
         }
     }
 
@@ -154,17 +171,17 @@ public:
         filename_ = filename;
         precision_ = precision;
         enabled_ = true;
-        if (!append && initialize_file)
+        if (initialize_file)
             enabled_ = writeLocked(filename_,
                 "time_old time_new id1 id2 m1 m2 a_old e_old a_new e_new "
-                "tmerge_old tmerge_new rx ry rz vx vy vz\n", true);
+                "tmerge_old tmerge_new rx ry rz vx vy vz dynamics_dlog_tgw\n", !append, append);
     }
 
     template<class Tparticle>
     void writeChange(double time_old, double time_new,
                      const Tparticle& p1, const Tparticle& p2,
                      double a_old, double e_old, double a_new, double e_new,
-                     double tmerge_old, double tmerge_new) const {
+                     double tmerge_old, double tmerge_new, double dynamics_dlog_tgw=0.0) const {
         if (!enabled_) return;
 #pragma omp critical(bhmerger_output)
         {
@@ -178,8 +195,9 @@ public:
                  << ' ' << tmerge_old << ' ' << tmerge_new;
             for (int k=0; k<3; ++k) line << ' ' << p1.pos[k]-p2.pos[k];
             for (int k=0; k<3; ++k) line << ' ' << p1.vel[k]-p2.vel[k];
-            line << '\n';
-            writeLocked(filename_, line.str(), false);
+            line << ' ' << dynamics_dlog_tgw << '\n';
+            if (!writeLocked(filename_, line.str(), false))
+                std::fprintf(stderr, "Failed to write merger event log %s\n", filename_.c_str());
         }
     }
 
@@ -212,7 +230,8 @@ public:
                  << std::setw(_width) << _semi;
             writeParticle(line, _remnant, _width);
             line << '\n';
-            writeLocked(filename_, line.str(), false);
+            if (!writeLocked(filename_, line.str(), false))
+                std::fprintf(stderr, "Failed to write merger event log %s\n", filename_.c_str());
         }
     }
 };

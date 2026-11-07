@@ -1,3 +1,4 @@
+#include <memory>
 #pragma once
 
 #include"tree_walk.hpp"
@@ -1420,19 +1421,26 @@ namespace ParticleSimulator{
             //std::cerr<<"n_thread= "<<n_thread<<std::endl;
             const F64 inv_theta_sq = 1.0 / (theta_*theta_);
             constexpr S32 size_vec_limit = SIMD_VEC_LEN*2;
-            ReallocatableArray<S32> adr_epj[N_THREAD_LIMIT][size_vec_limit];
-            ReallocatableArray<S32> adr_spj[N_THREAD_LIMIT][size_vec_limit];
+            using adr_epj_row = ReallocatableArray<S32>[size_vec_limit];
+            std::unique_ptr<adr_epj_row[]> adr_epj(new adr_epj_row[n_thread]);
+            using adr_spj_row = ReallocatableArray<S32>[size_vec_limit];
+            std::unique_ptr<adr_spj_row[]> adr_spj(new adr_spj_row[n_thread]);
             for(S32 i=0; i<n_thread; i++){
                 for(S32 j=0; j<size_vec_limit; j++){
                     adr_epj[i][j].reserve(100000);
                     adr_spj[i][j].reserve(100000);
                 }
             }
-            TargetBox<TSM> target_box[N_THREAD_LIMIT][size_vec_limit];
-            S32 n_epj[N_THREAD_LIMIT][size_vec_limit];
-            S32 n_spj[N_THREAD_LIMIT][size_vec_limit];
-            S32 n_disp_epj[N_THREAD_LIMIT][size_vec_limit+1];
-            S32 n_disp_spj[N_THREAD_LIMIT][size_vec_limit+1];
+            using target_box_row = TargetBox<TSM>[size_vec_limit];
+            std::unique_ptr<target_box_row[]> target_box(new target_box_row[n_thread]);
+            using n_epj_row = S32[size_vec_limit];
+            std::unique_ptr<n_epj_row[]> n_epj(new n_epj_row[n_thread]);
+            using n_spj_row = S32[size_vec_limit];
+            std::unique_ptr<n_spj_row[]> n_spj(new n_spj_row[n_thread]);
+            using n_disp_epj_row = S32[size_vec_limit+1];
+            std::unique_ptr<n_disp_epj_row[]> n_disp_epj(new n_disp_epj_row[n_thread]);
+            using n_disp_spj_row = S32[size_vec_limit+1];
+            std::unique_ptr<n_disp_spj_row[]> n_disp_spj(new n_disp_spj_row[n_thread]);
             const S32 adr_tree_sp_first = n_let_sp_;
             const S32 n_n_ipg = ((n_ipg-1) / size_vec_limit)+1;
             //std::cerr<<"n_ipg= "<<n_ipg<<" n_n_ipg= "<<n_n_ipg<<std::endl;

@@ -72,7 +72,7 @@ public:
     }
 
     int readBinary(FILE* fp){
-        size_t rcount=fread(this, sizeof(FileHeader), 1, fp);
+        size_t rcount=fread(this, sizeof(FileHeaderNoOffset), 1, fp);
         if(rcount<1) {
             std::cerr<<"Error: Data reading fails! requiring data number is "<<1<<" bytes, only obtain "<<rcount<<" bytes.\n";
             abort();
@@ -82,7 +82,7 @@ public:
     }
 
     void writeBinary(FILE* fp) const{
-        fwrite(this, sizeof(FileHeader), 1, fp);
+        fwrite(this, sizeof(FileHeaderNoOffset), 1, fp);
     }
 };
 

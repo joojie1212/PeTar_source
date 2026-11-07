@@ -346,6 +346,8 @@ PS_OMP_PARALLEL_FOR
      ReallocatableArray<S32> & rank_recv,
      const F64 theta,
      const enum EXCHANGE_LET_MODE exchange_let_mode_){
+        PARTICLE_SIMULATOR_PRINT_ERROR("FindScatterParticleLongCutoffP2P is not implemented; use the supported LET exchange API");
+        Abort(-1);
         const auto n_thread = Comm::getNumberOfThread();
         const auto n_proc = dinfo.getCommInfo().getNumberOfProc();
         const auto my_rank = dinfo.getCommInfo().getRank();

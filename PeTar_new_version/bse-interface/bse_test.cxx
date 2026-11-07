@@ -371,7 +371,7 @@ int main(int argc, char** argv){
         }
 
         int nbin = bin.size();
-#pragma omp parallel for schedule(dynamic)
+// Fortran COMMON state and shared output vectors require serial evolution.
         for (int i=0; i<nbin; i++) {
             // output file
 
@@ -397,7 +397,7 @@ int main(int argc, char** argv){
                 bin[i].semi = std::pow(period_myr*period_myr*G*mtot/(4*PI*PI),1.0/3.0)*pc_to_rsun;
 
                 StarParameter p1_star_bk = bin[i].star[0];
-                StarParameter p2_star_bk = bin[1].star[1];
+                StarParameter p2_star_bk = bin[i].star[1];
                 
                 // evolve function
                 int event_flag=bse_manager.evolveBinary(bin[i].star[0],bin[i].star[1],bin[i].out[0],bin[i].out[1],bin[i].semi,bin[i].period,bin[i].ecc,bin[i].bse_event, bin_type_last, dt);

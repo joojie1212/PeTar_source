@@ -37,7 +37,7 @@
       PARAMETER (ftzacc=0.5D0)
 ****
       COMMON /VALUE2/ ALPHA1,LAMBDA
-      LOGICAL COEL
+      LOGICAL COEL,SNEXPLOSION
       REAL*8 CELAMF,RL,RZAMSF
       EXTERNAL CELAMF,RL,RZAMSF
 * Tanikawa's BH model (prevent HGCE)
@@ -53,6 +53,7 @@
 *
       TWOPI = 2.D0*ACOS(-1.D0)
       COEL = .FALSE.
+      SNEXPLOSION = .FALSE.
 *
 * Obtain the core masses and radii.
 *
@@ -159,6 +160,7 @@
             IF(KW1.GE.13)THEN
                CALL kick(KW1,MF,M1,M2,ECC,SEPF,JORB,VKICK1,
      &              fbfac,fbtot,mco,ecs)
+               SNEXPLOSION = .TRUE.
                IF(ECC.GT.1.D0) GOTO 30
             ENDIF
          ENDIF
@@ -259,6 +261,7 @@
             IF(KW1.GE.13)THEN
                CALL kick(KW1,MF,M1,M2,ECC,SEPF,JORB,VKICK1,
      &              fbfac,fbtot,mco,ecs)
+               SNEXPLOSION = .TRUE.
                IF(ECC.GT.1.D0) GOTO 30
             ENDIF
             MF = M2
@@ -270,6 +273,7 @@
             IF(KW2.GE.13.AND.KW.LT.13)THEN
                CALL kick(KW2,MF,M2,M1,ECC,SEPF,JORB,VKICK2,
      &              fbfac,fbtot,mco,ecs)
+               SNEXPLOSION = .TRUE.
                IF(ECC.GT.1.D0) GOTO 30
             ENDIF
          ENDIF
@@ -370,10 +374,13 @@
 * energy to circularise the orbit before removing angular momentum. 
 * (note this should not be done in case of CE SN ... fix).  
 *
-         IF(EORBF.LT.ECIRC)THEN
-            ECC = SQRT(1.D0 - EORBF/ECIRC)
-         ELSE
-            ECC = 0.D0
+* Preserve the orbit returned by a supernova kick during this CE.
+         IF(.NOT.SNEXPLOSION)THEN
+            IF(EORBF.LT.ECIRC)THEN
+               ECC = SQRT(1.D0 - EORBF/ECIRC)
+            ELSE
+               ECC = 0.D0
+            ENDIF
          ENDIF
 *
 * Set both cores in co-rotation with the orbit on exit of CE, 

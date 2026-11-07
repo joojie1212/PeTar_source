@@ -93,7 +93,9 @@ namespace ParticleSimulator{
     void TreeForForce<TSM, Tforce, Tepi, Tepj, Tmomloc, Tmomglb, Tspj, CALC_DISTANCE_TYPE>::
     exchangeLocalEssentialTree(const DomainInfo & dinfo,
                                const bool flag_reuse){
-        if(typeid(TSM) == typeid(SEARCH_MODE_LONG)
+        if((typeid(TSM) == typeid(SEARCH_MODE_LONG)
+            || typeid(TSM) == typeid(SEARCH_MODE_LONG_SYMMETRY)
+            || typeid(TSM) == typeid(SEARCH_MODE_LONG_SCATTER))
            && dinfo.getBoundaryCondition() != BOUNDARY_CONDITION_OPEN){
             PARTICLE_SIMULATOR_PRINT_ERROR("The forces w/o cutoff can be evaluated only under the open boundary condition");
             Abort(-1);

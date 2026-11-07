@@ -12,13 +12,24 @@ bool calculate(double spin_y=0.5, bool bound=true) {
     return BHMerger::calculateRemnant(2.,1.,10.,0.,0.,0.,bound ? -0.5 : -2.,0.,
                                      0.5,0.,0.,0.,spin_y,0.,1.,10.);
 }
-int main() {
+int main(int argc, char** argv) {
+    const bool host=argc>1 && std::string(argv[1])=="--host";
+    if(host) Py_Initialize();
+    double e;
+    assert(eccentricityFromEnergyTerm(-1.-std::numeric_limits<double>::epsilon(),e) && e==0.);
+    assert(!eccentricityFromEnergyTerm(-1.01,e));
+    assert(!eccentricityFromEnergyTerm(INFINITY,e));
     assert(BHMerger::initializePython()==0);
+    if(argc>1 && std::string(argv[1])=="--import-only") {
+        python("import precession.eccentricity as real_module; print(real_module.__file__)");
+        assert(BHMerger::finalizePython()==0);
+        return 0;
+    }
     python(R"PY(
 import sys, types, numpy as np, gc, tracemalloc
 pkg=types.ModuleType('precession'); mod=types.ModuleType('precession.eccentricity')
 sys.modules['precession']=pkg; sys.modules['precession.eccentricity']=mod
-mod.fail=''; mod.bad=''; mod.last_phi=0.
+mod.fail=''; mod.bad=''; mod.last_phi=0.; mod.circular=False
 mod.fail_inspiral=False; mod.near_resonance=True; mod.resonance_calls=0
 def fit(name,size):
     def call(**kw):
@@ -43,6 +54,10 @@ def inspiral(**kw):
         return result
     result={k:np.array([[v,v]]) for k,v in [('theta1',kw['theta1']),('theta2',kw['theta2']),('deltaphi',kw['deltaphi']),('deltachi',0.),('kappa',0.),('a',10.),('e',0.),('uc',0.),('u',0.)]}
     result.update({k:np.array([v]) for k,v in [('chieff',0.),('q',kw['q']),('chi1',kw['chi1']),('chi2',kw['chi2'])]})
+    if mod.circular:
+        assert kw['e']==0.
+        result['e']=np.array([[0.]])
+        result['deltaphi']=np.array([[kw['deltaphi'],0.375]])
     return result
 mod.inspiral_precav=inspiral
 def resonance(**kw):
@@ -56,6 +71,10 @@ mod.conserved_to_angles=to_angles
     assert(calculate(0.5,false)); python("assert mod.last_phi>0");
     assert(calculate(-0.5,false)); python("assert mod.last_phi<0");
     assert(calculate());
+    python("mod.circular=True");
+    assert(BHMerger::calculateRemnant(2.,1.,3.,0.,0.,0.,-1.,0.,
+                                     0.5,0.,0.,0.,0.5,0.,1.,10.));
+    python("assert mod.last_phi==0.375; mod.circular=False");
     python("mod.fail_inspiral=True; mod.near_resonance=True; mod.resonance_calls=0");
     assert(calculate());
     python("assert mod.resonance_calls==1; assert abs(mod.last_phi-0.25)<1e-15");
@@ -74,5 +93,10 @@ mod.conserved_to_angles=to_angles
     for(int i=0;i<2000;++i) assert(calculate());
     python("gc.collect(); growth=tracemalloc.get_traced_memory()[0]-baseline; print('Python retained-memory growth:',growth); assert growth<65536; tracemalloc.stop()");
     assert(BHMerger::finalizePython()==0);
+    if(host) {
+        assert(Py_IsInitialized());
+        python("assert 2+2==4");
+        assert(Py_FinalizeEx()==0);
+    }
     std::cout << "Python bridge regressions passed\n";
 }

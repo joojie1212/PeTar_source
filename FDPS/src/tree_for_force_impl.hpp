@@ -41,7 +41,7 @@ PS_OMP_CRITICAL
     ::getMemSizeUsed() const {
         size_t tmp = 0;
         for(int i=0; i<Comm::getNumberOfThread(); i++){
-            tmp =
+            tmp +=
                 epj_for_force_[i].getMemSize() + spj_for_force_[i].getMemSize()
                 + epjr_send_buf_[i].getMemSize() + epjr_send_buf_for_scatter_[i].getMemSize() 
                 + epjr_recv_1st_sorted_[i].getMemSize();
@@ -276,6 +276,10 @@ PS_OMP_CRITICAL
              class Tmomloc, class Tmomglb, class Tspj, enum CALC_DISTANCE_TYPE CALC_DISTANCE_TYPE>
     void TreeForForce<TSM, Tforce, Tepi, Tepj, Tmomloc, Tmomglb, Tspj, CALC_DISTANCE_TYPE>::
     mortonSortLocalTreeOnly(const bool reuse){
+        if (reuse && adr_org_from_adr_sorted_loc_.size()!=n_loc_tot_) {
+            PARTICLE_SIMULATOR_PRINT_ERROR("REUSE_LIST requires unchanged local particle count; rebuild the list");
+            Abort(-1);
+        }
         const F64 wtime_offset = GetWtime();
         epi_sorted_.resizeNoInitialize(n_loc_tot_);
         epj_sorted_.resizeNoInitialize(n_loc_tot_);
@@ -381,6 +385,10 @@ PS_OMP_PARALLEL_FOR
              class Tmomloc, class Tmomglb, class Tspj, enum CALC_DISTANCE_TYPE CALC_DISTANCE_TYPE>
     void TreeForForce<TSM, Tforce, Tepi, Tepj, Tmomloc, Tmomglb, Tspj, CALC_DISTANCE_TYPE>::
     mortonSortGlobalTreeOnly(const bool reuse){
+        if (reuse && adr_org_from_adr_sorted_glb_.size()!=n_glb_tot_) {
+            PARTICLE_SIMULATOR_PRINT_ERROR("REUSE_LIST requires unchanged global particle count; rebuild the list");
+            Abort(-1);
+        }
         F64 time_offset = GetWtime();
         if(!map_id_to_epj_.empty()){
             map_id_to_epj_.clear();
@@ -694,14 +702,14 @@ PS_OMP_PARALLEL_FOR
         const S32 ith = Comm::getThreadNum();
         const S32 n_tmp = tc_glb_[0].n_ptcl_;
         S32 adr_ptcl_tmp = tc_glb_[0].adr_ptcl_;
-        epj_for_force_[ith].reserveEmptyAreaAtLeast( n_tmp );
-        for(S32 ip=0; ip<n_tmp; ip++){
-            if( GetMSB(tp_glb_[adr_ptcl_tmp].adr_ptcl_) == 0){
-                epj_for_force_[ith].pushBackNoCheck(epj_sorted_[adr_ptcl_tmp++]);
-            }
-            else {
-                adr_ptcl_tmp++;
-            }
+        epj_for_force_[ith].reserveEmptyAreaAtLeast(n_tmp);
+        spj_for_force_[ith].reserveEmptyAreaAtLeast(n_tmp);
+        for(S32 ip=0; ip<n_tmp; ++ip, ++adr_ptcl_tmp) {
+            const auto address=tp_glb_[adr_ptcl_tmp].adr_ptcl_;
+            if(GetMSB(address)==0)
+                epj_for_force_[ith].pushBackNoCheck(epj_sorted_[address]);
+            else
+                spj_for_force_[ith].pushBackNoCheck(spj_sorted_[ClearMSB(address)]);
         }
     }
     template<class TSM, class Tforce, class Tepi, class Tepj,
@@ -910,9 +918,9 @@ PS_OMP_PARALLEL_FOR
 #endif
             for(S32 j=0; j<n_image; j++){
                 for(S32 k=0; k<n_recv; k++){
-                    epj[j*n_image+k] = epj[k];
+                    epj[j*n_recv+k] = epj[k];
                     const F64vec pos_new = epj[k].getPos() + shift[j];
-                    epj[j*n_image+k].pos = pos_new;
+                    epj[j*n_recv+k].pos = pos_new;
                 }
             }
             pfunc_ep_ep(my_epi.getPointer(), n_loc_tot_, epj.getPointer(), n_recv*n_image, force);
