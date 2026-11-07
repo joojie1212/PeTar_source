@@ -39,7 +39,7 @@ for label, extra in [('default', []), ('tighter', ['-a','1e-9'])]:
         assert 'AR_ADAPTIVE_MULTIPLE' in log
         assert not any(x in log for x in ['AR_TIME_STALL','Negative_step:', 'Hard energy significant!', 'Warning: step count'])
         final=next(line for line in reversed(log.splitlines()) if line.startswith('Hard Energy:'))
-        fields={key:float(value) for key,value in re.findall(r'(\w+):\s*([-+\d.eE]+)',final)}
+        fields={key:float(value) for key,value in re.findall(r'(\w+):\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)',final)}
         e_initial=fields['Ekin']+fields['Epot']-fields['dE_change']-fields['dE']
         residual=abs(fields['dE']/e_initial)
         assert residual<1e-5,(label,residual)

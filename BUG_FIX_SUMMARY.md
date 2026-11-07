@@ -142,3 +142,12 @@ a78dd82f1ca4f60161046876b341d3e696692ba29ca7f590662306ec2147a4a6
 2026-11-04 在线执行 `git ls-remote origin refs/heads/main` 成功，远端返回同一提交 `06fe527376ecf6aab627155b570e0c2b7de86a68`；因此确认了当时的源码基线与 GitHub 仓库 `main` 一致。当时安装的程序还包含本表 B01–B42 中已实施、尚未提交的工作区修复；此处不是 2026-11-07 的远端状态核对。
 
 工作区在修复前已有用户修改（包括 Peters 合并时间相关文件、`README.md`、`Makefile.in` 和 `ar_interaction.hpp` 的部分内容）；本次修复保留了这些修改，没有重置或覆盖。
+
+## 2026-11-07：slowdown / 三体负时间步稳定性修复
+
+已完成原 N=2000 large-step dump 的回归。三体及以上系统自动启用持续的局部误差控制，
+保留 slowdown；另加 TTL 分母恢复和 64 次非正时间步的诊断退出保护，避免无限缩步。
+运行日志新增 `AR_ADAPTIVE_MULTIPLE`、`AR_SLOWDOWN_RECOVERY`、
+`AR_SLOWDOWN_RECOVERY_FAILED`、`AR_TIME_STALL`。
+默认/严格容差重放的相对能量残差为 6.89e-8 / 6.17e-8，均正常完成。
+详细修改、发生率限制、故障注入和部署状态见 [slowdown debug 记录](bugs/SLOWDOWN_DEBUG.md)。
