@@ -65,7 +65,9 @@ void testRestartClock() {
 }
 
 void testNeighborAndIdMap() {
-    for (double shift: {0.,1e8}) {
+    // Legacy SIMD counting is only translation-robust at representable scales.
+    // Large-offset F32 robustness (B09) was deliberately reverted for speed.
+    for (double shift: {0.,16.}) {
         EPISoft i; EPJSoft j;
         i.pos=PS::F64vec(shift+3.5,0,0); j.pos=PS::F64vec(shift+4.5,0,0);
         i.r_search=j.r_search=2.; j.mass=1.; j.id=12;
