@@ -2005,18 +2005,21 @@ namespace AR {
 #if defined(AR_TTL) && defined(AR_SLOWDOWN_TREE)
             slowdown_recovery_active_ = false;
 #endif
-            // A geometric hierarchy can undergo a close encounter/exchange.
-            // Keep local error control active for multiples even when the
-            // initial tree was classified stable. Preserve explicit 'always'.
-            if (particles.getSize()>2 && info.fix_step_option==FixStepOption::later) {
-                info.fix_step_option = FixStepOption::none;
-                std::ostringstream message;
-                message << std::setprecision(17)
-                        << "AR_ADAPTIVE_MULTIPLE time=" << time_+info.time_offset
-                        << " n=" << particles.getSize() << " fix_step=later->none\n";
-#pragma omp critical(ar_slowdown_diagnostic)
-                { std::cerr << message.str(); }
-            }
+            // Preserve the normal fixed-step policy. Reject failed gravitational
+            // trials below using the existing POST-interruption backup, so BSE,
+            // merger clocks and event output are never replayed.
+            const bool guard_multiple = particles.getSize()>2
+                && info.fix_step_option==FixStepOption::later;
+            bool adaptive_retry = false;
+            unsigned int failed_trial_count = 0;
+            struct RestoreFixedPolicy {
+                FixStepOption& policy;
+                const bool guarded;
+                const bool& retried;
+                ~RestoreFixedPolicy() {
+                    if (guarded && retried) policy=FixStepOption::later;
+                }
+            } restore_fixed_policy{info.fix_step_option, guard_multiple, adaptive_retry};
             // real full time step
             const Float dt_full = _time_end - time_;
 
@@ -2488,6 +2491,27 @@ namespace AR {
                 
                 step_count++;
 
+                // Pure gravitational trials have no BSE/output side effects.
+                // Reject invalid trials before existing diagnostics can abort.
+                bool invalid_trial = !(dt>0.0) || ISINF(dt);
+#ifdef AR_TTL
+                invalid_trial = invalid_trial || !(gt_drift_inv_>0.0)
+                    || ISINF(gt_drift_inv_) || !(gt_kick_inv_>0.0)
+                    || ISINF(gt_kick_inv_);
+#endif
+                if (guard_multiple && invalid_trial) {
+                    if (++failed_trial_count>=64) {
+                        std::cerr << "AR_FIXED_RETRY_FAILED: invalid gravitational trial\n";
+                        abort();
+                    }
+                    adaptive_retry = true;
+                    info.fix_step_option = FixStepOption::none;
+                    ds[ds_switch] *= 0.5;
+                    ds[1-ds_switch] = ds[ds_switch];
+                    backup_flag = false;
+                    continue;
+                }
+
                 // Bound retries even when rounded time increments reach zero.
                 // This runs before the energy-error retry path, which could
                 // otherwise bypass the negative-time check indefinitely.
@@ -2532,6 +2556,25 @@ namespace AR {
                 Float integration_error_rel_abs = abs(H-H_bk);
                 // H should be zero initially
                 Float integration_error_rel_cum_abs = abs(H);
+
+                if (guard_multiple &&
+                    (!(integration_error_rel_abs<=energy_error_rel_max)
+                     || ISINF(integration_error_rel_abs))) {
+                    // A stable interval stays on 'later'. Once a trial fails,
+                    // keep adaptive control for the rest of this interval.
+                    if (++failed_trial_count>=64) {
+                        std::cerr << "AR_FIXED_RETRY_FAILED: energy error\n";
+                        abort();
+                    }
+                    adaptive_retry = true;
+                    info.fix_step_option = FixStepOption::none;
+                    ds[ds_switch] *= 0.5;
+                    ds[1-ds_switch] = ds[ds_switch];
+                    backup_flag = false;
+                    continue;
+                }
+                failed_trial_count = 0;
+                if (adaptive_retry) info.fix_step_option = FixStepOption::none;
 
                 Float integration_error_ratio = energy_error_rel_max/integration_error_rel_abs;
       
@@ -2826,7 +2869,26 @@ namespace AR {
                         }
                         // increase step size if energy error is small, not works correctly, integration error may not increase when ds becomes larger, then a very large ds may appear after several iterations. suppress
                         else if(integration_error_rel_abs<0.5*energy_error_rel_max && dt>0.0 && dt_full/dt>std::max(100.0,0.02*manager->step_count_max)) {
-                            Float integration_error_ratio = energy_error_rel_max/integration_error_rel_abs;
+                            if (guard_multiple &&
+                    (!(integration_error_rel_abs<=energy_error_rel_max)
+                     || ISINF(integration_error_rel_abs))) {
+                    // A stable interval stays on 'later'. Once a trial fails,
+                    // keep adaptive control for the rest of this interval.
+                    if (++failed_trial_count>=64) {
+                        std::cerr << "AR_FIXED_RETRY_FAILED: energy error\n";
+                        abort();
+                    }
+                    adaptive_retry = true;
+                    info.fix_step_option = FixStepOption::none;
+                    ds[ds_switch] *= 0.5;
+                    ds[1-ds_switch] = ds[ds_switch];
+                    backup_flag = false;
+                    continue;
+                }
+                failed_trial_count = 0;
+                if (adaptive_retry) info.fix_step_option = FixStepOption::none;
+
+                Float integration_error_ratio = energy_error_rel_max/integration_error_rel_abs;
                             Float step_modify_factor = std::min(Float(100.0),manager->step.calcStepModifyFactorFromErrorRatio(integration_error_ratio));
                             ASSERT(step_modify_factor>0.0);
                             ds[1-ds_switch] *= step_modify_factor;

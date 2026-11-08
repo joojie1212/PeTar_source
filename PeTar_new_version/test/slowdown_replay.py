@@ -36,7 +36,7 @@ for label, extra in [('default', []), ('tighter', ['-a','1e-9'])]:
             args.output.mkdir(parents=True,exist_ok=True)
             (args.output/f'{label}.stderr').write_text(log)
         assert result.returncode==0, (label,result.returncode,log[-1000:])
-        assert 'AR_ADAPTIVE_MULTIPLE' in log
+        assert 'AR_ADAPTIVE_MULTIPLE' not in log
         assert not any(x in log for x in ['AR_TIME_STALL','Negative_step:', 'Hard energy significant!', 'Warning: step count'])
         final=next(line for line in reversed(log.splitlines()) if line.startswith('Hard Energy:'))
         fields={key:float(value) for key,value in re.findall(r'(\w+):\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)',final)}

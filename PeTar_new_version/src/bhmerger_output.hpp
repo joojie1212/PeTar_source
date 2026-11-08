@@ -2,6 +2,13 @@
 
 #ifdef BHMERGER
 
+#include <memory>
+#include <vector>
+#include <fstream>
+#include <cstdlib>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 #include <cerrno>
 #include <cstdio>
 #include <sys/stat.h>
@@ -26,6 +33,11 @@ private:
     std::string filename_;
     int precision_;
     bool enabled_;
+    // Shared ownership supports ARInteraction copies; each stream has exactly
+    // one OpenMP writer. Flush only after the worker region has completed.
+    using ChangeStreams = std::vector<std::unique_ptr<std::ofstream>>;
+    std::shared_ptr<ChangeStreams> change_streams_;
+
 
     static bool writeLocked(const std::string& _filename,
                             const std::string& _content,
@@ -168,6 +180,7 @@ public:
     // WRITE_WIDTH, in which case fixed-width columns alone would run together.
     void openChange(const std::string& filename, bool append,
                     bool initialize_file, int precision) {
+        change_streams_.reset();
         filename_ = filename;
         precision_ = precision;
         enabled_ = true;
@@ -177,12 +190,61 @@ public:
                 "tmerge_old tmerge_new rx ry rz vx vy vz dynamics_dlog_tgw\n", !append, append);
     }
 
+    void openChangeSharded(const std::string& prefix, bool append,
+                           int rank, int threads, int precision) {
+        filename_ = prefix;
+        precision_ = precision;
+        enabled_ = true;
+        change_streams_ = std::make_shared<ChangeStreams>();
+        for (int t=0; t<threads; ++t) {
+            const auto name = prefix + "." + std::to_string(rank) + "." + std::to_string(t);
+            std::ifstream existing(name, std::ios::binary | std::ios::ate);
+            const bool header = !append || !existing || existing.tellg()==std::streampos(0);
+            auto stream = std::make_unique<std::ofstream>(name,
+                std::ios::out | (append ? std::ios::app : std::ios::trunc));
+            if (!*stream) enabled_ = false;
+            if (header) *stream << "time_old time_new id1 id2 m1 m2 a_old e_old a_new e_new "
+                "tmerge_old tmerge_new rx ry rz vx vy vz dynamics_dlog_tgw\n";
+            *stream << std::setprecision(precision_);
+            stream->flush();
+            if (!*stream) enabled_ = false;
+            change_streams_->push_back(std::move(stream));
+        }
+        if (threads<=0) enabled_=false;
+    }
+
+    void flushChanges() const {
+        if (!change_streams_) return;
+        for (auto& stream: *change_streams_) {
+            stream->flush();
+            if (!*stream) { std::fprintf(stderr,"Failed to flush change log\n"); std::abort(); }
+        }
+    }
+
     template<class Tparticle>
     void writeChange(double time_old, double time_new,
                      const Tparticle& p1, const Tparticle& p2,
                      double a_old, double e_old, double a_new, double e_new,
                      double tmerge_old, double tmerge_new, double dynamics_dlog_tgw=0.0) const {
         if (!enabled_) return;
+        if (change_streams_) {
+            int thread=0;
+#ifdef _OPENMP
+            thread=omp_get_thread_num();
+            if (omp_get_level()>1) std::abort(); // thread IDs must be unique writers
+#endif
+            if (static_cast<std::size_t>(thread)>=change_streams_->size()) std::abort();
+            auto& line=*(*change_streams_)[thread];
+            line << time_old << ' ' << time_new << ' ' << p1.id << ' ' << p2.id
+                 << ' ' << p1.mass << ' ' << p2.mass
+                 << ' ' << a_old << ' ' << e_old << ' ' << a_new << ' ' << e_new
+                 << ' ' << tmerge_old << ' ' << tmerge_new;
+            for (int k=0;k<3;++k) line << ' ' << p1.pos[k]-p2.pos[k];
+            for (int k=0;k<3;++k) line << ' ' << p1.vel[k]-p2.vel[k];
+            line << ' ' << dynamics_dlog_tgw << '\n';
+            if (!line) { std::fprintf(stderr,"Failed to write change log\n"); std::abort(); }
+            return;
+        }
 #pragma omp critical(bhmerger_output)
         {
             std::ostringstream line;
@@ -206,6 +268,8 @@ public:
     }
 
     void close() {
+        flushChanges();
+        change_streams_.reset();
         enabled_ = false;
         filename_.clear();
     }

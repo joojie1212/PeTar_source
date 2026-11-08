@@ -371,3 +371,24 @@ MC-03 的修复不仅补上输入周期的总质量因子，还在返回时使�
 ### 三阶潮汐张量与四极矩安装（2026-11-07）
 
 按用户确认配置 `--with-tidal-tensor=3rd --enable-quad`，保留 MPI/OpenMP/AVX2、BSE、BHMERGER 等选项，强制重编译并安装。`/home/joojie/bin/petar` 现指向 `petar.mpi.omp.avx2.bse.tt3rd`；安装后帮助输出确认三阶潮汐张量和四极矩。mcluster 普通版及 SSE 版亦重新编译安装，保留普通版原有指向源码构建产物的链接，SSE 版位于 `/home/joojie/bin/mcluster_sse`。5 个可执行文件校验值均与构建产物一致。本次按要求不备份，不修改 mcluster 算法。构建与校验记录：`diagnostics/petar_tt3_quad_install_wi7wfczo`。
+
+## 2026-11-08：AR 固定步长异常回退与 change 日志优化
+
+按用户要求，取代此前对全部多体 `later->none` 的无条件切换：正常保留
+`later`，试算误差超限或时间/TTL 非法时恢复 BSE 回调之后的步级备份、减半 ds，
+本区间自适应重算；不重放 BSE、随机事件或日志。删除 AR_ADAPTIVE_MULTIPLE 输出。
+生产 change 改用 `data.change.<rank>.<thread>` 独占缓冲流，快照时刷新；保留
+bhmerger 共享日志。提供 merge_change_logs.py 合并供原分析脚本读取。
+验证与限制见 PeTar_new_version/test/ar_fixed_retry.md；故障 dump 重放通过，但
+紧容差下子步数增加，未声称全星团提速。未安装或重启已有运行。
+
+### 高频扰动小 N 性能对照（2026-11-08）
+
+以 0d1dd21 为修改前基线，对 16/32 个 30 Msun 黑洞的高密度子系统，各取
+3 个初态、每版交替重复 5 次，共 60 次成功运行；固定 BSE/Python 随机种子，
+单核计时包含积分及事件输出。六组中位耗时合计下降约 1.85%，单组变化
+为 -9.08% 至 +4.71%，没有一致明显加速，未进行正式统计显著性检验。
+各组并合次数及有序成员配对一致，但部分 AR 子步、BSE 事件行及 change 行数改变。
+五组在两版均有 hard-energy 告警，因此仅作为性能压力测试，不作为物理精度验证。
+单线程未覆盖日志锁争用，不能外推 N4000/16 核收益。
+完整输入、构建、原始记录、图表及限制见 diagnostics/ar_ab_20261108/REPORT.md。

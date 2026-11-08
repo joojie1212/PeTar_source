@@ -29,4 +29,33 @@ int main() {
     out.openChange(file.string(),true,true,17);
     assert(out.isOpen() && contents(file).find("time_old")!=std::string::npos);
     std::filesystem::remove(file);
+    // Each rank/thread owns a persistent stream; reopening appends one header.
+    struct ChangeParticle { long long id=1; double mass=1.; double pos[3]={}; double vel[3]={}; } cp;
+    for (int rank=0;rank<2;++rank) {
+        for (int round=0;round<2;++round) {
+            out.openChangeSharded(file.string(),round!=0,rank,4,17);
+            assert(out.isOpen());
+            auto copied=out; // AR interaction copies share the same stream owners
+#pragma omp parallel num_threads(4)
+            {
+                for(int j=0;j<100;++j)
+                    copied.writeChange(j,j+1,cp,cp,1,.1,2,.2,3,4);
+            }
+            out.flushChanges();
+        }
+        out.close();
+        for(int t=0;t<4;++t) {
+            const auto shard=file.string()+"."+std::to_string(rank)+"."+std::to_string(t);
+            std::ifstream input(shard); std::string line;
+            std::getline(input,line); assert(line.find("time_old")==0);
+            int rows=0;
+            while(std::getline(input,line)) {
+                std::istringstream row(line); double value; int columns=0;
+                while(row>>value) ++columns;
+                assert(columns==19); ++rows;
+            }
+            assert(rows==200);
+            std::filesystem::remove(shard);
+        }
+    }
 }

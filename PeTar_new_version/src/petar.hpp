@@ -2327,6 +2327,9 @@ public:
                     system_soft[i].printColumnTitle(fstatus, WRITE_WIDTH);
             fstatus<<std::endl;
         }
+#ifdef BHMERGER
+        hard_manager.ar_manager.interaction.change_output.flushChanges();
+#endif
         // write status, output to separate snapshots
         if(write_style==1) {
 
@@ -3316,10 +3319,17 @@ public:
                 my_rank == 0,
                 WRITE_WIDTH,
                 WRITE_PRECISION);
-            hard_manager.ar_manager.interaction.change_output.openChange(
-                fname_snp + ".change",
-                input_parameters.append_switcher.value == 1,
-                my_rank == 0, 17);
+            int change_threads=1;
+#ifdef _OPENMP
+            change_threads=omp_get_max_threads();
+#endif
+            hard_manager.ar_manager.interaction.change_output.openChangeSharded(
+                fname_snp + ".change", input_parameters.append_switcher.value == 1,
+                my_rank, change_threads, 17);
+            if (!hard_manager.ar_manager.interaction.change_output.isOpen()) {
+                std::cerr << "Error: cannot initialize rank/thread change logs" << std::endl;
+                PS::Abort();
+            }
             int merger_logs_ready =
                 hard_manager.ar_manager.interaction.bhmerger_output.isOpen() &&
                 hard_manager.ar_manager.interaction.change_output.isOpen();

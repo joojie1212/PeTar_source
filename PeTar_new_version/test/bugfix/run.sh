@@ -49,9 +49,15 @@ for variant in default KDKDK_4TH; do
         PeTar_new_version/test/bugfix/kickdrift.cxx -o "$output/kickdrift-$variant"
     env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/kickdrift-$variant"
 done
-g++ -std=c++17 "${san[@]}" -DBHMERGER "${inc[@]}" \
+g++ -std=c++17 "${san[@]}" -fopenmp -DBHMERGER "${inc[@]}" \
     PeTar_new_version/test/bugfix/merger_log.cxx -Wl,--wrap=write -o "$output/merger_log"
 env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/merger_log"
 g++ -std=c++17 "${san[@]}" -DINTEGRATED_CUTOFF_FUNCTION -DHARD_CHECK_ENERGY \
     "${inc[@]}" PeTar_new_version/test/bugfix/cm_prediction.cxx -o "$output/cm_prediction"
 env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/cm_prediction"
+
+# Fixed-step triples retain their policy and rejected trials do not replay callbacks.
+g++ -std=c++17 "${san[@]}" -fopenmp -DAR_TTL -DAR_SLOWDOWN_TREE \
+    -DAR_SLOWDOWN_TIMESCALE -DHARD_CHECK_ENERGY "${inc[@]}" \
+    PeTar_new_version/test/bugfix/fixed_retry.cxx -o "$output/fixed_retry"
+env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/fixed_retry"
