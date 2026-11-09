@@ -10,7 +10,11 @@ g++ -std=c++17 "${san[@]}" -DINTEGRATED_CUTOFF_FUNCTION -DHARD_CHECK_ENERGY "${i
 # LeakSanitizer cannot enumerate processes inside the managed sandbox.
 # Set BUGFIX_DETECT_LEAKS=1 in an unrestricted environment for the leak check.
 timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/core"
-g++ -std=c++17 "${san[@]}" -fopenmp -march=core-avx2 -DDEV_CODE -DUSE_SIMD -DINTRINSIC_X86 -DPARTICLE_SIMULATOR_THREAD_PARALLEL -DSTELLAR_EVOLUTION -DBSE_BASE -DBSEBBF -DBHMERGER -DAR_TTL -DAR_SLOWDOWN_TREE -DAR_SLOWDOWN_TIMESCALE -DHARD_CHECK_ENERGY -DRECORD_CM_IN_HEADER -DCLUSTER_VELOCITY -DPROFILE "${inc[@]}" PeTar_new_version/test/bugfix/integration.cxx PeTar_new_version/bse-interface/libbse.a -lgfortran -o "$output/integration"
+# Exercise both full internal gravity and directional changeover tie handling.
+for cutoff in off on; do
+    cutoff_flags=()
+    if [[ "$cutoff" == on ]]; then cutoff_flags=(-DAR_CHANGEOVER); fi
+g++ -std=c++17 "${san[@]}" "${cutoff_flags[@]}" -fopenmp -march=core-avx2 -DDEV_CODE -DUSE_SIMD -DINTRINSIC_X86 -DPARTICLE_SIMULATOR_THREAD_PARALLEL -DSTELLAR_EVOLUTION -DBSE_BASE -DBSEBBF -DBHMERGER -DAR_TTL -DAR_SLOWDOWN_TREE -DAR_SLOWDOWN_TIMESCALE -DHARD_CHECK_ENERGY -DRECORD_CM_IN_HEADER -DCLUSTER_VELOCITY -DPROFILE "${inc[@]}" PeTar_new_version/test/bugfix/integration.cxx PeTar_new_version/bse-interface/libbse.a -lgfortran -o "$output/integration"
 tls_hex=$(readelf -SW "$output/integration" | awk '$2==".tbss" {print $6}')
 tls_bytes=$((16#${tls_hex:-0}))
 if (( tls_bytes > 1048576 )); then
@@ -18,6 +22,7 @@ if (( tls_bytes > 1048576 )); then
     exit 1
 fi
 timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/integration"
+done
 g++ -std=c++17 -g -O1 "-DPETAR_PRECESSION_SOURCE_DIR=\"$repo/PeTar_new_version/bhmerger/precession-master\"" -I/usr/include/python3.11 -I/usr/lib/python3/dist-packages/numpy/core/include PeTar_new_version/test/bugfix/python_bridge.cxx -lpython3.11 -o "$output/python_bridge"
 timeout 60s "$output/python_bridge"
 timeout 60s "$output/python_bridge" --host

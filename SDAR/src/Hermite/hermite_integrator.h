@@ -2720,6 +2720,48 @@ namespace H4{
 
         }
 
+        //! Resolve an event-time diagnostic state without changing predictors.
+        // The target group is already at the AR event time. Other groups retain
+        // their resolved internal coordinates and use event-time CM prediction.
+        int snapshotEventParticles(std::vector<Tparticle>& out,
+                                   std::vector<unsigned char>& in_group,
+                                   Float* origin, const Tparticle* target,
+                                   const Float event_time) const {
+            const Float t=event_time-time_offset_;
+            out.resize(particles.getSize()); in_group.assign(particles.getSize(),0);
+            auto predict=[&](const auto& p) {
+                Tparticle q=p; const Float dt=t-p.time;
+                for(int d=0;d<3;++d) {
+                    q.pos[d]=p.pos[d]+dt*(p.vel[d]+0.5*dt*(p.acc0[d]+dt*p.acc1[d]/3.0));
+                    q.vel[d]=p.vel[d]+dt*(p.acc0[d]+0.5*dt*p.acc1[d]);
+                }
+                return q;
+            };
+            for(int i=0;i<particles.getSize();++i) { out[i]=particles[i]; out[i].mass=0; }
+            for(int j=0;j<index_dt_sorted_single_.getSize();++j) {
+                const int i=index_dt_sorted_single_[j]; out[i]=predict(particles[i]);
+            }
+            int target_group=-1;
+            for(int k=0;k<index_dt_sorted_group_.getSize();++k) {
+                const int i=index_dt_sorted_group_[k]; const auto& g=groups[i];
+                const auto cm=predict(g.particles.cm);
+                bool owns=false;
+                for(int j=0;j<g.particles.getSize();++j) owns |= &g.particles[j]==target;
+                for(int j=0;j<g.particles.getSize();++j) {
+                    const int z=g.info.particle_index[j]; out[z]=g.particles[j];
+                    for(int d=0;d<3;++d) { out[z].pos[d]+=cm.pos[d]; out[z].vel[d]+=cm.vel[d]; }
+                    if(owns) in_group[z]=1;
+                }
+                if(owns) { target_group=i; for(int d=0;d<3;++d)origin[d]=cm.pos[d]; }
+            }
+            return target_group;
+        }
+
+        Float getEventGroupPotential(const int group_index) const {
+            ASSERT(group_index>=0 && group_index<groups.getSize());
+            return force_[group_index+index_offset_group_].pot;
+        }
+
         //! write back group members to particles
         void writeBackGroupMembers() {
             const int n_group = index_dt_sorted_group_.getSize();

@@ -11,6 +11,7 @@
 #include "ar_perturber.hpp"
 #include "two_body_tide.hpp"
 #include "peters_merger_time.hpp"
+#include "merger_partition.hpp"
 #ifdef BHMERGER
 #include "bhmerger_output.hpp"
 #endif
@@ -87,6 +88,14 @@ public:
     template<class Tbinary>
     void refreshBHMergerPrediction(Tbinary& bin, PtclHard& p1, PtclHard& p2,
                                    const Float now, const bool record_change = false) const {
+        bin.calcOrbit(gravitational_constant);
+        refreshBHMergerPredictionFromOrbit(bin,p1,p2,now,record_change);
+    }
+
+    // Caller must have updated the orbit after the last mass/position/velocity change.
+    template<class Tbinary>
+    void refreshBHMergerPredictionFromOrbit(Tbinary& bin, PtclHard& p1, PtclHard& p2,
+                                            const Float now, const bool record_change=false) const {
         const bool log_change = record_change
             && p1.getBinaryPairID()==p2.id && p2.getBinaryPairID()==p1.id
             && p1.time_merger>=0.0 && p2.time_merger>=0.0
@@ -96,7 +105,6 @@ public:
         const Float old_e = p1.merger_ecc;
         const Float old_time = p1.merger_record_time;
         const Float old_deadline = std::max(p1.time_merger, p2.time_merger);
-        bin.calcOrbit(gravitational_constant);
         if (!(bin.semi>0.0 && bin.ecc>=0.0 && bin.ecc<1.0)
             || !std::isfinite(bin.semi) || !std::isfinite(bin.ecc)) {
             if (log_change)
@@ -128,11 +136,21 @@ public:
     }
 
     static Float bhMergerLogLifetimeShape(const Float a, const Float e) {
+        // Exact-key memoization of the original expression. No interpolation,
+        // particle-layout changes or cross-thread state; NaNs never hit.
+        struct Entry { Float a=std::numeric_limits<Float>::quiet_NaN(), e=-1.0, value=0.0; };
+        static thread_local Entry cache[2];
+        static thread_local unsigned next=0;
+        for (const auto& entry: cache)
+            if (entry.a==a && entry.e==e) return entry.value;
         // Full Peters factor, evaluated in log space even at very high e.
         const Float log_f = e>PetersMergerTime::eccentricity_switch
             ? std::log(768.0/425.0)+3.5*(std::log1p(-e)+std::log1p(e))
             : std::log(PetersMergerTime::eccentricityFactor(e));
-        return 4.0*std::log(a)+log_f;
+        const Float value=4.0*std::log(a)+log_f;
+        cache[next].a=a; cache[next].e=e; cache[next].value=value;
+        next^=1;
+        return value;
     }
 
     static bool significantBHMergerDynamics(const Float delta) {
@@ -144,8 +162,10 @@ public:
         if (!validBHMergerOrbit(bin.semi,bin.ecc)
             || !validBHMergerOrbit(p.merger_semi,p.merger_ecc))
             return std::numeric_limits<Float>::quiet_NaN();
-        return bhMergerLogLifetimeShape(bin.semi,bin.ecc)
-            - bhMergerLogLifetimeShape(p.merger_semi,p.merger_ecc);
+        // Read the old checkpoint first, before inserting the new orbit into
+        // the two-entry cache. Subtraction and both operands are unchanged.
+        const Float old_shape=bhMergerLogLifetimeShape(p.merger_semi,p.merger_ecc);
+        return bhMergerLogLifetimeShape(bin.semi,bin.ecc)-old_shape;
     }
 
     template<class Tbinary>
@@ -174,13 +194,13 @@ public:
         if (p1.getBinaryPairID()!=p2.id || p2.getBinaryPairID()!=p1.id
             || p1.time_merger<0.0 || p2.time_merger<0.0
             || p1.merger_record_time<0.0 || p2.merger_record_time<0.0) {
-            refreshBHMergerPrediction(bin,p1,p2,now);
+            refreshBHMergerPredictionFromOrbit(bin,p1,p2,now);
             return;
         }
         p1.merger_dyn_log_tgw += bhMergerDynamicalIncrement(bin,p1);
         p2.merger_dyn_log_tgw = p1.merger_dyn_log_tgw;
         if (significantBHMergerDynamics(p1.merger_dyn_log_tgw))
-            refreshBHMergerPrediction(bin,p1,p2,now,true);
+            refreshBHMergerPredictionFromOrbit(bin,p1,p2,now,true);
         else
             saveBHMergerDynamicalCheckpoint(bin,p1,p2,now);
     }
@@ -199,7 +219,7 @@ public:
         }
         if (reset_clock || p1.getBinaryPairID()!=p2.id || p2.getBinaryPairID()!=p1.id
             || p1.time_merger<0.0 || p2.time_merger<0.0) {
-            refreshBHMergerPrediction(bin,p1,p2,now);
+            refreshBHMergerPredictionFromOrbit(bin,p1,p2,now);
             return;
         }
         saveBHMergerDynamicalCheckpoint(bin,p1,p2,now);
@@ -444,65 +464,61 @@ public:
       \return the inverse time transformation factor (gt_kick_inv) for kick step
     */
     inline Float calcInnerAccPotAndGTKickInv(AR::Force* _force, Float& _epot, const PtclHard* _particles, const int _n_particle) {
-        _epot = Float(0.0);
-        Float gt_kick_inv = Float(0.0);
-
-        for (int i=0; i<_n_particle; i++) {
-            const Float massi = _particles[i].mass;
-            const Float* posi = &_particles[i].pos.x;
-            Float* acci = _force[i].acc_in;
-            acci[0] = acci[1] = acci[2] = Float(0.0);
-
+        // Each target still accumulates neighbours in ascending index order.
+        // Keep separate per-target potentials to preserve the old reduction order.
+        Float pot[_n_particle], kick[_n_particle];
+        for (int i=0; i<_n_particle; ++i) {
+            pot[i]=kick[i]=0.0;
+            for (int k=0; k<3; ++k) {
+                _force[i].acc_in[k]=0.0;
 #ifdef AR_TTL
-            Float* gtgradi = _force[i].gtgrad;
-            gtgradi[0] = gtgradi[1] = gtgradi[2] = Float(0.0);
+                _force[i].gtgrad[k]=0.0;
 #endif
-
-            Float poti = Float(0.0);
-            Float gtki = Float(0.0);
-
-            for (int j=0; j<_n_particle; j++) {
-                if (i==j) continue;
-                const Float massj = _particles[j].mass;
-                const Float* posj = &_particles[j].pos.x;
-                Float dr[3] = {posj[0] -posi[0],
-                               posj[1] -posi[1],
-                               posj[2] -posi[2]};
-                Float r2 = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
-                Float inv_r = 1.0/sqrt(r2);
-                Float inv_r3 = inv_r*inv_r*inv_r;
-#ifdef AR_CHANGEOVER
-                Float r = r2*inv_r;
-                const Float kpot  = ChangeOver::calcPotWTwo(_particles[i].changeover, _particles[j].changeover, r);
-                const Float k     = ChangeOver::calcAcc0WTwo(_particles[i].changeover, _particles[j].changeover, r);
-
-                Float gmor3 = gravitational_constant*massj*inv_r3*k;
-                Float gmor = gravitational_constant*massj*inv_r*kpot;
-#else
-                Float gmor3 = gravitational_constant*massj*inv_r3;
-                Float gmor = gravitational_constant*massj*inv_r;
-#endif
-                acci[0] += gmor3 * dr[0];
-                acci[1] += gmor3 * dr[1];
-                acci[2] += gmor3 * dr[2];
-
-#ifdef AR_TTL
-                Float gmimjor3 = massi*gmor3;
-                gtgradi[0] += gmimjor3 * dr[0];
-                gtgradi[1] += gmimjor3 * dr[1];
-                gtgradi[2] += gmimjor3 * dr[2];
-#endif
-
-                poti -= gmor;
-                gtki += gmor;
-
             }
-            _epot += poti * massi;
-            gt_kick_inv += gtki * massi;
         }
-        _epot   *= 0.5;
-        gt_kick_inv *= 0.5;
-
+        for (int i=0; i<_n_particle; ++i) {
+            for (int j=i+1; j<_n_particle; ++j) {
+                Float dr[3];
+                for (int k=0; k<3; ++k) dr[k]=_particles[j].pos[k]-_particles[i].pos[k];
+                const Float r2=dr[0]*dr[0]+dr[1]*dr[1]+dr[2]*dr[2];
+                const Float inv_r=1.0/sqrt(r2), inv_r3=inv_r*inv_r*inv_r;
+                Float ai=gravitational_constant*_particles[j].mass*inv_r3;
+                Float aj=gravitational_constant*_particles[i].mass*inv_r3;
+                Float pi=gravitational_constant*_particles[j].mass*inv_r;
+                Float pj=gravitational_constant*_particles[i].mass*inv_r;
+#ifdef AR_CHANGEOVER
+                const Float r=r2*inv_r;
+                const auto& ci=_particles[i].changeover;
+                const auto& cj=_particles[j].changeover;
+                const Float w=ChangeOver::calcPotWTwo(ci,cj,r);
+                const Float a=ChangeOver::calcAcc0WTwo(ci,cj,r);
+                pi*=w; ai*=a;
+                // Equal outer radii can have different inner radii: retain the
+                // original directional tie-breaking of calc*WTwo.
+                if (ci.getRout()==cj.getRout()) {
+                    pj*=ChangeOver::calcPotWTwo(cj,ci,r);
+                    aj*=ChangeOver::calcAcc0WTwo(cj,ci,r);
+                } else { pj*=w; aj*=a; }
+#endif
+                for (int k=0; k<3; ++k) {
+                    _force[i].acc_in[k]+=ai*dr[k];
+                    _force[j].acc_in[k]+=aj*(-dr[k]);
+#ifdef AR_TTL
+                    _force[i].gtgrad[k]+=(_particles[i].mass*ai)*dr[k];
+                    _force[j].gtgrad[k]+=(_particles[j].mass*aj)*(-dr[k]);
+#endif
+                }
+                pot[i]-=pi; kick[i]+=pi;
+                pot[j]-=pj; kick[j]+=pj;
+            }
+        }
+        _epot=0.0;
+        Float gt_kick_inv=0.0;
+        for (int i=0; i<_n_particle; ++i) {
+            _epot+=pot[i]*_particles[i].mass;
+            gt_kick_inv+=kick[i]*_particles[i].mass;
+        }
+        _epot*=0.5; gt_kick_inv*=0.5;
         return gt_kick_inv;
     }
 
@@ -529,8 +545,12 @@ public:
             auto* pert_adr = _perturber.neighbor_address.getDataAddress();
 
             Float xp[n_pert][3], xcm[3], m[n_pert];
-            std::vector<ChangeOver*> changeover(n_pert_single);
-            std::vector<H4::NBAdr<PtclHard>::Group*> ptclgroup(n_pert_group);
+            // Thread-owned scratch only; no particle predictions survive calls.
+            // This synchronous force routine has no recursive callbacks.
+            static thread_local std::vector<ChangeOver*> changeover;
+            static thread_local std::vector<H4::NBAdr<PtclHard>::Group*> ptclgroup;
+            changeover.resize(n_pert_single);
+            ptclgroup.resize(n_pert_group);
 
             int n_single_count=0;
             int n_group_count=0;
@@ -1049,6 +1069,12 @@ public:
 
 #ifdef BSE_BASE
             auto postProcess =[&](StarParameterOut* out, Float* pos_cm, Float*vel_cm, Float& semi, Float& ecc, int binary_type_final) {
+                // Only actual particle replacements need a resolved event audit.
+                // BSE has updated star records, but dynamical mass/position are
+                // still the pre-event values at this point.
+                MergerPartitionEvent merger_partition(*p1,*p2,_bin_interrupt.time_now,
+                    p1->mass>0 && p2->mass>0
+                    && (bse_manager.getMass(p1->star)==0 || bse_manager.getMass(p2->star)==0));
                 // if status not set, set to change
                 if (_bin_interrupt.status == AR::InterruptStatus::none)
                     _bin_interrupt.status = AR::InterruptStatus::change;

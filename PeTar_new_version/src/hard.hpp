@@ -183,6 +183,112 @@ public:
     PS::S32 n_neighbor_zero;
 #endif
 
+    // Event corrections are independent of AR's dynamical energy reference.
+    PS::F64 merger_partition_correction = 0.0;
+    PS::F64 merger_soft_correction = 0.0;
+    std::vector<PtclHard> merger_initial_state;
+
+    static void beginMergerPartition(void* owner, MergerPartitionEvent& event) {
+        auto& self=*static_cast<HardIntegrator*>(owner);
+        if(self.use_sym_int) {
+            const auto& g=self.sym_int;
+            event.state.resize(g.particles.getSize());
+            event.in_group.assign(g.particles.getSize(),1);
+            for(int d=0;d<3;++d)event.origin[d]=g.particles.cm.pos[d];
+            for(int i=0;i<g.particles.getSize();++i) {
+                event.state[i]=g.particles[i];
+                for(int d=0;d<3;++d)event.state[i].pos[d]+=event.origin[d];
+            }
+        } else {
+            const int group=self.h4_int.snapshotEventParticles(event.state,event.in_group,
+                event.origin,event.first,event.time);
+            ASSERT(group>=0);
+            event.group_potential=self.h4_int.getEventGroupPotential(group);
+        }
+        for(int i=0;i<int(event.state.size());++i) {
+            if(event.state[i].id==event.before_first.id)event.first_index=i;
+            if(event.state[i].id==event.before_second.id)event.second_index=i;
+        }
+        ASSERT(event.first_index>=0 && event.second_index>=0);
+    }
+
+    static void finishMergerPartition(void* owner, MergerPartitionEvent& event) {
+        auto& self=*static_cast<HardIntegrator*>(owner);
+        auto after=event.state;
+        after[event.first_index]=*event.first; after[event.second_index]=*event.second;
+        for(int i: {event.first_index,event.second_index})
+            for(int d=0;d<3;++d)after[i].pos[d]+=event.origin[d];
+        const Float G=self.manager->ar_manager.interaction.gravitational_constant;
+        const Float eps2=self.manager->h4_manager.interaction.eps_sq;
+        auto potential=[&](const PtclHard& a,const PtclHard& b,bool hard,bool softened=true) {
+            if(a.mass==0 || b.mass==0)return Float(0);
+            const auto dr=a.pos-b.pos;
+            const Float r=std::sqrt(dr*dr+(hard && softened?eps2:0));
+            ASSERT(r>0);
+            return -G*a.mass*b.mass/r*(hard?ChangeOver::calcPotWTwo(a.changeover,b.changeover,r):1.0);
+        };
+        Float change=0, soft_change=0;
+        for(int i: {event.first_index,event.second_index}) {
+            for(int j=0;j<int(after.size());++j) {
+                if(i==j || (i==event.second_index && j==event.first_index))continue;
+                // Match the directed tie rule and pair order of Hermite energy.
+                const int hi=std::max(i,j),lo=std::min(i,j);
+                change+=potential(after[hi],after[lo],true)-potential(event.state[hi],event.state[lo],true);
+                // Complement of the hard potential at the same event state.
+                auto soft=[&](const PtclHard& a,const PtclHard& b) {
+                    if(a.mass==0 || b.mass==0)return Float(0);
+                    const auto dr=a.pos-b.pos;
+                    const Float r=std::sqrt(dr*dr+eps2);
+                    return -G*a.mass*b.mass/r-potential(a,b,true);
+                };
+                soft_change+=soft(after[hi],after[lo])-soft(event.state[hi],event.state[lo]);
+                if(event.in_group[j]) {
+#ifdef AR_CHANGEOVER
+                    // AR internal gravity is unsoftened, including when the
+                    // surrounding Hermite force uses nonzero eps.
+                    change-=0.5*(potential(after[hi],after[lo],true,false)
+                                +potential(after[lo],after[hi],true,false)
+                                -potential(event.state[hi],event.state[lo],true,false)
+                                -potential(event.state[lo],event.state[hi],true,false));
+#else
+                    change-=potential(after[hi],after[lo],false)-potential(event.state[hi],event.state[lo],false);
+#endif
+                }
+            }
+        }
+        const Float dm=event.first->mass+event.second->mass-event.before_first.mass-event.before_second.mass;
+        // The existing Hermite event handler will still book this CM term.
+        change-=event.group_potential*dm;
+        self.merger_partition_correction+=change;
+        // correctSoftPotMassChange still applies dm*cached_pot_soft at the
+        // tree boundary. Replace its intra-cluster part, leaving the external
+        // tree field under the existing frozen-field approximation.
+        for(int i: {event.first_index,event.second_index}) {
+            const auto& before=event.state[i];
+            for(const auto& initial: self.merger_initial_state) {
+                if(initial.id!=before.id)continue;
+                Float phi=0;
+                for(const auto& other: self.merger_initial_state) {
+                    if(other.id==initial.id || other.mass==0)continue;
+                    const auto dr=initial.pos-other.pos;
+                    const Float r=std::sqrt(dr*dr+eps2);
+                    phi-=G*other.mass/r*(1-ChangeOver::calcPotWTwo(initial.changeover,other.changeover,r));
+                }
+                soft_change-=(after[i].mass-before.mass)*phi;
+                break;
+            }
+        }
+        self.merger_soft_correction+=soft_change;
+        // Only schedule the new split. Current forces/radii stay valid until
+        // the synchronized tree boundary. Group construction may override it.
+        for(PtclHard* p: {event.first,event.second}) if(p->mass>0) {
+            ChangeOver target;
+            target.setR(p->mass*Ptcl::mean_mass_inv,self.manager->r_in_base,self.manager->r_out_base);
+            p->changeover.r_scale_next=target.getRin()/p->changeover.getRin();
+            p->r_search=std::max(p->r_search,target.getRout());
+        }
+    }
+
     bool use_sym_int;  ///> use AR integrator flag
     bool is_initialized; ///> indicator whether initialization is done
 #if defined(BSE_BASE) && defined(FROZEN_BINARY)
@@ -301,6 +407,9 @@ public:
         ASSERT(!is_initialized);
 
         is_initialized = true;
+        merger_partition_correction = 0.0;
+        merger_soft_correction = 0.0;
+        merger_initial_state.assign(_ptcl, _ptcl+_n_ptcl);
 
         // set manager
         manager = _manager;
@@ -675,6 +784,7 @@ public:
      */
     AR::InterruptBinary<PtclHard>& integrateToTime(const PS::F64 _time_end) {
         ASSERT(checkParams());
+        MergerPartitionEvent::Binding merger_binding({this,beginMergerPartition,finishMergerPartition});
 
 #ifdef HARD_DUMP
         // dump flag
@@ -1210,6 +1320,20 @@ public:
         }
 
 #ifdef HARD_CHECK_ENERGY
+        // Add only event potential terms missing from AR/internal + H4/CM.
+        // Do not feed this correction into AR etot_ref/TTL or its step control.
+        if(!use_sym_int) {
+            energy.de -= merger_partition_correction;
+            energy.de_sd -= merger_partition_correction;
+        }
+        energy.de_change_cum += merger_partition_correction;
+        energy.de_change_binary_interrupt += merger_partition_correction;
+        energy.de_sd_change_cum += merger_partition_correction;
+        energy.de_sd_change_binary_interrupt += merger_partition_correction;
+        // Soft event correction belongs to the global reference only, never
+        // to the measured hard integration residual or AR time transform.
+        energy.de_change_cum += merger_soft_correction;
+        energy.de_sd_change_cum += merger_soft_correction;
         energy.ekin_sd_correction = ekin_sd - ekin;
         energy.epot_sd_correction = epot_sd - epot;
         // exclude the slowdown energy change due to the turn off of slowdown
@@ -1386,6 +1510,7 @@ private:
         }
         PS::F64 rin_cm = _par.changeover_cm->getRin();
         PS::F64 rin_p  = _ptcl->changeover.getRin();
+        _ptcl->changeover.r_scale_next=1.0;
         if (rin_p!=rin_cm) {
             // avoid round-off error case
             if (abs(rin_p-rin_cm)<1e-10) {
@@ -2635,6 +2760,18 @@ public:
         PS::S32 group_ptcl_adr_list[_n_ptcl];
         PS::S32 group_ptcl_adr_offset=0;
         bool changeover_update_flag = false;
+        // Reconstruct mass-grown remnant targets from physical state, including
+        // after a restart (r_scale_next is intentionally not part of old files).
+        // Ungrouped particles use their own mass; stable groups override below.
+        for(int j=0;j<_n_ptcl;++j) {
+            auto& p=_ptcl_in_cluster[j];
+            if(p.mass>0) {
+                ChangeOver target; target.setR(p.mass*Tptcl::mean_mass_inv,manager->r_in_base,manager->r_out_base);
+                p.changeover.r_scale_next=target.getRin()/p.changeover.getRin();
+                if(std::abs(p.changeover.r_scale_next-1.0)<1e-12)p.changeover.r_scale_next=1.0;
+                p.r_search=std::max(p.r_search,target.getRout());
+            }
+        }
         _n_groups = 0;
         auto& ap_manager = manager->ap_manager;
 
@@ -2874,7 +3011,9 @@ public:
         // reorder ptcl
         for (int i=0; i<_n_ptcl; i++) _ptcl_in_cluster[i]=ptcl_tmp[ptcl_list_reorder[i]];
 
-        // changeover update
+        // Include ungrouped remnants; do not rely on the stable-binary path.
+        changeover_update_flag=false;
+        for(int j=0;j<_n_ptcl;++j) changeover_update_flag |= _ptcl_in_cluster[j].changeover.r_scale_next!=1.0;
         if (changeover_update_flag) _changeover_update_list.push_back(_i_cluster);
     }
 
@@ -3084,6 +3223,14 @@ public:
             }
         }
         
+        // Export targets of single remnants too (group members were exported above).
+        for(int j=0;j<ptcl_hard_.size();++j) {
+            const auto& p=ptcl_hard_[j];
+            if(p.adr_org>=0) {
+                _sys[p.adr_org].changeover=p.changeover;
+                _sys[p.adr_org].r_search=std::max(_sys[p.adr_org].r_search,p.r_search);
+            }
+        }
         // merge i_cluster_changeover
         i_cluster_changeover_update_.resizeNoInitialize(0);
         for(PS::S32 i=0; i<num_thread; i++) {

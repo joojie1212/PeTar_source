@@ -999,6 +999,18 @@ public:
 #endif    
     }
 
+    // Conservative pre-search envelope for mass-grown remnants and recoil.
+    // Active cutoffs are left untouched until the split synchronization boundary.
+    void prepareRemnantSearch(const PS::F64 dt_tree) {
+        for(PS::S32 i=0;i<stat.n_real_loc;++i) {
+            auto& p=system_soft[i];
+            if(p.mass<=0)continue;
+            ChangeOver target; target.setR(p.mass*Ptcl::mean_mass_inv,hard_manager.r_in_base,hard_manager.r_out_base);
+            p.r_search=std::max(p.r_search,std::max(target.getRout(),p.changeover.getRout())
+                +std::sqrt(p.vel*p.vel)*dt_tree*Ptcl::search_factor);
+        }
+    }
+
     //! and ground and create artificial particles
     /*! @param[in] _dt_tree: tree time step for calculating r_search and set stablility checker period limit
      */
@@ -2130,6 +2142,20 @@ public:
         profile.force_correct.start();
 #endif
         // correct changeover for first step
+        // Truly isolated particles have no short-range pair in either search
+        // envelope; changing their own radius cannot alter this boundary's force.
+        for(PS::S32 k=0;k<search_cluster.getAdrSysOneCluster().size();++k) {
+            auto& p=system_soft[search_cluster.getAdrSysOneCluster()[k]];
+            if(p.mass>0) {
+                p.changeover.setR(p.mass*Ptcl::mean_mass_inv,hard_manager.r_in_base,hard_manager.r_out_base);
+                p.changeover.r_scale_next=1.0;
+            }
+        }
+        PS::S32 changed = system_hard_isolated.getNClusterChangeOverUpdate();
+#ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
+        changed += system_hard_connected.getNClusterChangeOverUpdate();
+        changed = PS::Comm::getSum(changed);
+#endif
         // Isolated clusters
         system_hard_isolated.correctForceForChangeOverUpdateOMP<SystemSoft, TreeForce, EPJSoft>(system_soft, tree_soft);
 
@@ -2139,11 +2165,24 @@ public:
         system_hard_connected.correctForceForChangeOverUpdateOMP<SystemSoft, TreeForce, EPJSoft>(system_soft, tree_soft, adr_send.getPointer(), adr_send.size());
 #endif
 
+
 #ifdef PROFILE
         profile.force_correct.barrier();
         PS::Comm::barrier();
         profile.force_correct.end();
 #endif
+
+        // Rebuild both force and potential caches with the committed split.
+        // This also covers remote members and artificial particles; a local
+        // acceleration-only correction cannot refresh their potential caches.
+        if (changed>0) {
+            treeSoftForce();
+            externalForce();
+            treeForceCorrectChangeover();
+#ifdef DARKMATTER
+            darkMatterForce();
+#endif
+        }
 
     }
 
@@ -2730,6 +2769,10 @@ public:
 #ifdef STELLAR_EVOLUTION
     //! Correct potential energy due to modificaiton of particle mass
     void correctSoftPotMassChange() {
+        // MergerPartitionEvent has already added the resolved intra-cluster
+        // soft jump minus this frozen-cache contribution to the hard system's
+        // global reference correction. Keep this term for all mass changes:
+        // it supplies the external field and is not a second merger correction.
         // correct soft potential energy due to mass change
 		PS::F64 depot_sum = 0;
 #pragma omp parallel for reduction(+:depot_sum)
@@ -4234,6 +4277,7 @@ public:
 
         // >1. Tree for neighbor searching 
         /// get neighbor list to tree_nb
+        prepareRemnantSearch(dt_tree);
         treeNeighborSearch();
 
         // >2. search clusters
@@ -4532,6 +4576,7 @@ public:
 
             // >1. Tree for neighbor searching 
             /// get neighbor list to tree_nb
+            prepareRemnantSearch(dt_tree);
             treeNeighborSearch();
 
             // >2. search clusters

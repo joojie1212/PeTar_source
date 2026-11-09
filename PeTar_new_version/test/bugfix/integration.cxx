@@ -2,6 +2,8 @@
 #include <memory>
 #include <sstream>
 #include <unistd.h>
+#include <random>
+#include "ar_force_reference.hpp"
 
 FPSoft sampleParticle(int id) {
     FPSoft p;
@@ -47,7 +49,7 @@ void testRestartAndPrint() {
 }
 
 void testRestartClock() {
-    struct Orbit { double semi=2.,ecc=0.25,period=1.; void calcOrbit(double) {} } bin;
+    struct Orbit { double semi=2.,ecc=0.25,period=1.; int calls=0; void calcOrbit(double) { ++calls; } } bin;
     FPSoft a=sampleParticle(1),b=sampleParticle(2),r1,r2;
     a.setBinaryPairID(2); b.setBinaryPairID(1);
     for(FPSoft* p: {&a,&b}) {
@@ -62,6 +64,11 @@ void testRestartClock() {
     interaction.checkBHMergerDynamicalChange(bin,p1,p2,13.);
     assert(p1.time_merger==a.time_merger && p2.time_merger==b.time_merger);
     assert(p1.merger_record_time==13. && p1.merger_dyn_log_tgw==0.01);
+    assert(bin.calls==1);
+    bin.semi=-1.; bin.calls=0;
+    interaction.checkBHMergerDynamicalChange(bin,p1,p2,14.);
+    assert(bin.calls==1); // refresh consumes the already computed orbit
+    assert(p1.time_merger==-1. && p2.time_merger==-1.);
 }
 
 void testNeighborAndIdMap() {
@@ -210,8 +217,167 @@ void testOutputProtectionAndTitles() {
     p.reset(); std::filesystem::remove_all(dir);
 }
 
+
+void testARPairKernelAndCache() {
+#pragma omp parallel for
+    for (int worker=0; worker<4; ++worker) {
+        std::mt19937_64 local(7214+worker);
+        std::uniform_real_distribution<double> draw(-1.,1.);
+        ARInteraction fast; DirectedForceReference ref;
+        fast.gravitational_constant=ref.gravitational_constant=0.73;
+        for (int n: {1,2,3,8,32}) for(int trial=0; trial<40; ++trial) {
+            std::vector<PtclHard> p(n);
+            std::vector<AR::Force> f(n), r(n);
+            for (int i=0;i<n;++i) {
+                p[i].mass=(i==0 && trial%3==0)?0.:std::exp(draw(local)*8.);
+                p[i].pos=PS::F64vec(draw(local),draw(local),draw(local));
+                // Includes unequal inner radii with equal outer radii.
+                p[i].changeover.setR(0.1+0.02*i, trial%2?3.:2.+0.1*i);
+            }
+            Float ef,er;
+            Float kf=fast.calcInnerAccPotAndGTKickInv(f.data(),ef,p.data(),n);
+            Float kr=ref.calcInnerAccPotAndGTKickInv(r.data(),er,p.data(),n);
+            auto equal=[](Float a,Float b) {
+                assert(std::abs(a-b)<=2e-14*std::max(Float(1.),std::max(std::abs(a),std::abs(b))));
+            };
+            equal(ef,er); equal(kf,kr);
+            for(int i=0;i<n;++i) for(int k=0;k<3;++k) {
+                equal(f[i].acc_in[k],r[i].acc_in[k]);
+#ifdef AR_TTL
+                equal(f[i].gtgrad[k],r[i].gtgrad[k]);
+#endif
+            }
+        }
+        for(double e: {0.,0.1,0.9,0.9999,0.99999}) for(double a: {1e-9,0.1,1e5}) {
+            const double logf=e>PetersMergerTime::eccentricity_switch
+                ? std::log(768.0/425.0)+3.5*(std::log1p(-e)+std::log1p(e))
+                : std::log(PetersMergerTime::eccentricityFactor(e));
+            const double expected=4.*std::log(a)+logf;
+            for(int repeat=0;repeat<3;++repeat)
+                assert(ARInteraction::bhMergerLogLifetimeShape(a,e)==expected);
+        }
+    }
+}
+
+
+
+void testSynchronizedPartitionCache() {
+    ForceSoft::grav_const=1.; EPISoft::eps=0.; EPISoft::r_out=1.;
+    struct ParticleArray: std::vector<FPSoft> {
+        ParticleArray(): std::vector<FPSoft>(3) {}
+        int getNumberOfParticleLocal() const { return size(); }
+    } p;
+    struct NeighborTree {
+        EPJSoft neighbors[3];
+        int getNeighborListOneParticle(const FPSoft&, EPJSoft*& out) {
+            out=neighbors; return 3;
+        }
+    } tree;
+    ArtificialParticleManager artificial;
+    for(int i=0;i<3;++i) {
+        p[i]=sampleParticle(i+1); p[i].mass=i+1;
+        p[i].pos=PS::F64vec(i==2?32.:0.5*i,0.,0.);
+    }
+    auto rebuild=[&]() {
+        for(int i=0;i<3;++i) {
+            p[i].pot_tot=p[i].pot_soft=-p[i].mass; p[i].acc=0.;
+            for(int j=0;j<3;++j)if(i!=j) {
+                auto dr=p[i].pos-p[j].pos;
+                double r=std::max(1.,std::sqrt(dr*dr));
+                p[i].pot_tot-=p[j].mass/r; p[i].pot_soft-=p[j].mass/r;
+                p[i].acc-=p[j].mass/(r*r*r)*dr;
+            }
+            tree.neighbors[i].copyFromFP(p[i]);
+        }
+        SystemHard::correctForceWithCutoffTreeNeighborOMP<ParticleArray,FPSoft,NeighborTree,EPJSoft>(p,tree,3,artificial);
+    };
+    rebuild(); auto before=p;
+    p[0].changeover.r_scale_next=3.; p[0].changeover.updateWithRScale();
+    rebuild();
+    for(int i=0;i<3;++i) {
+        assert(std::abs(p[i].pot_tot-before[i].pot_tot)<1e-12);
+        double dh=0.; PS::F64vec ah_old(0.),ah_new(0.);
+        for(int j=0;j<3;++j)if(i!=j) {
+            auto dr=p[i].pos-p[j].pos; double r=std::sqrt(dr*dr);
+            dh-=p[j].mass/r*(ChangeOver::calcPotWTwo(p[i].changeover,p[j].changeover,r)
+                           -ChangeOver::calcPotWTwo(before[i].changeover,before[j].changeover,r));
+            ah_old-=p[j].mass/(r*r*r)*ChangeOver::calcAcc0WTwo(before[i].changeover,before[j].changeover,r)*dr;
+            ah_new-=p[j].mass/(r*r*r)*ChangeOver::calcAcc0WTwo(p[i].changeover,p[j].changeover,r)*dr;
+        }
+        assert(std::abs(p[i].pot_soft-before[i].pot_soft+dh)<1e-12);
+        auto da=p[i].acc+ah_new-before[i].acc-ah_old;
+        assert(std::sqrt(da*da)<1e-12);
+    }
+}
+
+// Compare callback accounting to independently summed whole-system energies.
+void testMergerPartitionAccounting() {
+    HardManager manager;
+    manager.r_in_base=0.1; manager.r_out_base=1.;
+    manager.ar_manager.interaction.gravitational_constant=1.;
+    manager.h4_manager.interaction.eps_sq=0.;
+    HardIntegrator integrator;
+    integrator.manager=&manager;
+    Ptcl::mean_mass_inv=1.;
+    std::vector<PtclHard> p(4);
+    for(int i=0;i<4;++i) {
+        p[i].DataCopy(sampleParticle(i+1));
+        p[i].mass=i+1;
+        p[i].pos=PS::F64vec(i==3?100.:0.4*i,0.,0.);
+        p[i].changeover.setR(0.1*(i+1),1.*(i+1));
+    }
+    integrator.merger_initial_state=p;
+    auto energy=[](const std::vector<PtclHard>& q,int kind) {
+        double e=0;
+        for(int i=0;i<int(q.size());++i)for(int j=0;j<i;++j) {
+            if(q[i].mass==0 || q[j].mass==0)continue;
+            auto dr=q[i].pos-q[j].pos; double r=std::sqrt(dr*dr);
+            double w=ChangeOver::calcPotWTwo(q[i].changeover,q[j].changeover,r);
+            if(kind==2 && (i==3 || j==3))continue;
+#ifdef AR_CHANGEOVER
+            if(kind==2) w=ChangeOver::calcPotWTwo(q[i].changeover,q[j].changeover,r);
+#else
+            if(kind==2) w=1.;
+#endif
+            e-=q[i].mass*q[j].mass/r*(kind==1?1.-w:w);
+        }
+        return e;
+    };
+    double expected_hard=0, expected_soft=0;
+    for(int victim: {1,2}) {
+        const auto before=p;
+        MergerPartitionEvent event(p[0],p[victim],1.,false);
+        event.state=before; event.in_group={1,1,1,0};
+        event.first_index=0; event.second_index=victim;
+        event.group_potential=-0.7;
+        p[0].mass+=p[victim].mass-0.1;
+        p[0].pos.x+=0.02; p[victim].mass=0.;
+        const double old_r=p[0].changeover.getRout();
+        HardIntegrator::finishMergerPartition(&integrator,event);
+        expected_hard+=energy(p,0)-energy(before,0)-(energy(p,2)-energy(before,2))-0.07;
+        expected_soft+=energy(p,1)-energy(before,1);
+        for(int i: {0,victim}) {
+            double phi=0;
+            const auto& initial=integrator.merger_initial_state;
+            for(int j=0;j<4;++j)if(j!=i) {
+                auto dr=initial[i].pos-initial[j].pos; double r=std::sqrt(dr*dr);
+                phi-=initial[j].mass/r*(1.-ChangeOver::calcPotWTwo(initial[i].changeover,initial[j].changeover,r));
+            }
+            expected_soft-=(p[i].mass-before[i].mass)*phi;
+        }
+        assert(std::abs(integrator.merger_partition_correction-expected_hard)<1e-11);
+        assert(std::abs(integrator.merger_soft_correction-expected_soft)<1e-11);
+        assert(p[0].changeover.getRout()==old_r);
+        assert(std::abs(old_r*p[0].changeover.r_scale_next-std::cbrt(p[0].mass))<1e-12);
+    }
+    integrator.manager=nullptr;
+}
+
 int main(int argc,char** argv) {
     PeTar::initialFDPS(argc,argv); omp_set_num_threads(4);
+    testSynchronizedPartitionCache();
+    testMergerPartitionAccounting();
+    testARPairKernelAndCache();
     testRestartAndPrint(); testRestartClock(); testNeighborAndIdMap(); testSimdHeapBuffer();
     testEscaperReduction(); testBSEUnitsAndMass(); testOutputProtectionAndTitles();
     PeTar::finalizeFDPS(); std::cout<<"integration regressions passed\n";
