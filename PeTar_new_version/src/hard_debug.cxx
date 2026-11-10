@@ -250,6 +250,16 @@ int main(int argc, char **argv){
 
   HardDump hard_dump;
   hard_dump.readOneCluster(filename.c_str());
+  if (hard_dump.n_arti>0 &&
+      hard_dump.n_arti!=hard_dump.n_group*hard_manager.ap_manager.getArtificialParticleN()) {
+      std::cerr<<"Incompatible artificial-particle layout in hard dump: "
+               <<hard_dump.n_arti<<" particles for "<<hard_dump.n_group
+               <<" groups; this build expects "<<hard_manager.ap_manager.getArtificialParticleN()
+               <<" per group. Use the executable that wrote this dump. "
+               <<"Ordinary real-particle restart snapshots are unaffected.\n";
+      return 2;
+  }
+
   std::cerr<<"Time end: "<<hard_dump.time_end<<std::endl;
 
 #ifdef SOFT_PERT

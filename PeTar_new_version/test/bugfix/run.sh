@@ -47,6 +47,16 @@ g++ -std=c++17 "${san[@]}" -fopenmp -DAR_TTL -DAR_SLOWDOWN_ARRAY \
     PeTar_new_version/test/bugfix/array_merger.cxx -o "$output/array_merger"
 timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/array_merger"
 
+# Quad cutoff sources preserve physical component weights and orbital moments.
+for quad_variant in default KDKDK_4TH; do
+    quad_flags=()
+    if [[ "$quad_variant" != default ]]; then quad_flags+=("-D$quad_variant"); fi
+    g++ -std=c++17 "${san[@]}" "${quad_flags[@]}" -fopenmp -DCLUSTER_VELOCITY -DAR_TTL -DAR_SLOWDOWN_TREE \
+        -DAR_SLOWDOWN_TIMESCALE -DHARD_CHECK_ENERGY "${inc[@]}" \
+        PeTar_new_version/test/bugfix/quad_cutoff.cxx -o "$output/quad_cutoff-$quad_variant"
+    env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/quad_cutoff-$quad_variant"
+done
+
 for variant in default KDKDK_4TH; do
     flags=()
     if [[ "$variant" != default ]]; then flags+=("-D$variant"); fi

@@ -2,8 +2,9 @@
 #include <vector>
 #include "hard_ptcl.hpp"
 
-// Event-local bookkeeping. No particle/dump layout changes; callbacks are owned
-// by the active hard integrator, not by the shared ARInteraction manager.
+// Event-local bookkeeping for mergers and non-merging orbital updates.
+// No particle/dump layout changes; callbacks belong to the active hard
+// integrator, not to the shared ARInteraction manager.
 struct MergerPartitionEvent {
     PtclHard *first, *second;
     PtclHard before_first, before_second;
@@ -33,8 +34,14 @@ struct MergerPartitionEvent {
         if (bound.begin) bound.begin(bound.owner,*this);
     }
     ~MergerPartitionEvent() {
-        if (bound.finish && before_first.mass>0 && before_second.mass>0
-            && (first->mass==0 || second->mass==0)) bound.finish(bound.owner,*this);
+        if (!bound.finish) return;
+        // A velocity-only update is already covered by AR/CM kinetic accounting.
+        auto changed=[](const PtclHard& a,const PtclHard& b) {
+            return a.mass!=b.mass || a.pos.x!=b.pos.x
+                || a.pos.y!=b.pos.y || a.pos.z!=b.pos.z;
+        };
+        if (changed(before_first,*first) || changed(before_second,*second))
+            bound.finish(bound.owner,*this);
     }
     MergerPartitionEvent(const MergerPartitionEvent&)=delete;
     MergerPartitionEvent& operator=(const MergerPartitionEvent&)=delete;

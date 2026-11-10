@@ -80,6 +80,7 @@ int MPI_Irecv(void* buffer, int count, MPI_Datatype datatype, int dest, int tag,
 #endif
 #include"energy.hpp"
 #include"hard.hpp"
+#include"tree_source_mass.hpp"
 #include"io.hpp"
 #include"status.hpp"
 #ifdef DARKMATTER
@@ -2136,6 +2137,25 @@ public:
     
 #endif    
 
+    // Rebuild at fixed physical state, including after kick/output writeback.
+    void rebuildSoftForceWithChangeover() {
+        {
+            TreeSourceMassGuard source_mass;
+            source_mass.mask(system_soft,stat.n_real_loc);
+            source_mass.mask(system_hard_isolated.getPtcl(),system_hard_isolated.getPtcl().size());
+#ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
+            source_mass.mask(system_hard_connected.getPtcl(),system_hard_connected.getPtcl().size());
+#endif
+            treeSoftForce();
+            externalForce();
+            treeForceCorrectChangeover();
+        }
+#ifdef DARKMATTER
+        // Coupled star/DM forces need the physical masses, not the tree mask.
+        darkMatterForce();
+#endif
+    }
+
     //! correct force due to the change over update
     void correctForceChangeOverUpdate() {
 #ifdef PROFILE
@@ -2152,6 +2172,10 @@ public:
             }
         }
         PS::S32 changed = system_hard_isolated.getNClusterChangeOverUpdate();
+        // Orbital samples carry their own pending cutoff, independently of the
+        // real members. Include them in the collective rebuild decision.
+        for(PS::S32 i=stat.n_real_loc; i<stat.n_all_loc; ++i)
+            if(system_soft[i].changeover.r_scale_next!=1.0) ++changed;
 #ifdef PARTICLE_SIMULATOR_MPI_PARALLEL
         changed += system_hard_connected.getNClusterChangeOverUpdate();
         changed = PS::Comm::getSum(changed);
@@ -2165,6 +2189,12 @@ public:
         system_hard_connected.correctForceForChangeOverUpdateOMP<SystemSoft, TreeForce, EPJSoft>(system_soft, tree_soft, adr_send.getPointer(), adr_send.size());
 #endif
 
+        // Commit the source representation at the same boundary as the real
+        // members. Leaving orbital samples at the old cutoff makes the next
+        // soft kick inconsistent with the new hard interaction. CM and tidal
+        // probes normally already have the target cutoff (scale == 1).
+        for(PS::S32 i=stat.n_real_loc; i<stat.n_all_loc; ++i)
+            system_soft[i].changeover.updateWithRScale();
 
 #ifdef PROFILE
         profile.force_correct.barrier();
@@ -2175,14 +2205,7 @@ public:
         // Rebuild both force and potential caches with the committed split.
         // This also covers remote members and artificial particles; a local
         // acceleration-only correction cannot refresh their potential caches.
-        if (changed>0) {
-            treeSoftForce();
-            externalForce();
-            treeForceCorrectChangeover();
-#ifdef DARKMATTER
-            darkMatterForce();
-#endif
-        }
+        if (changed>0) rebuildSoftForceWithChangeover();
 
     }
 
@@ -4720,11 +4743,11 @@ public:
 
             // interrupt
             if(interrupt_flag) {
+                // Rebuild while group_data still has its artificial layout.
+                correctForceChangeOverUpdate();
 #ifdef CLUSTER_VELOCITY
                 setParticleGroupDataToCMData();
 #endif
-                // correct force due to the change over update
-                correctForceChangeOverUpdate();
 
                 // need remove artificial particles
                 system_soft.setNumberOfParticleLocal(stat.n_real_loc);

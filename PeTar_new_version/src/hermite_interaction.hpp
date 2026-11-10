@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vector>
 #include "Common/Float.h"
 #include "changeover.hpp"
 
@@ -471,6 +472,29 @@ public:
      */
     template<class Tp, class Tgroup, class Tpert>
     inline void calcEnergy(H4::HermiteEnergy& _energy, const Tp* _particles, const int _n_particle, const Tgroup* _groups, const int* _group_index, const int _n_group, const Tpert& _perturber) {
+        // Reuse thread-local scratch: HermiteInteraction is shared by OMP
+        // workers and its binary parameter layout must remain unchanged.
+        struct EnergyMember {
+            int group = -1;
+            Float pos[3];
+        };
+        static thread_local std::vector<EnergyMember> member_buffer;
+        EnergyMember* members = nullptr;
+        if (_n_group>0) {
+            member_buffer.resize(_n_particle);
+            members=member_buffer.data();
+            for (int i=0;i<_n_particle;++i) members[i].group=-1;
+            for (int k=0;k<_n_group;++k) {
+                const auto& group=_groups[_group_index[k]];
+                for (int j=0;j<group.particles.getSize();++j) {
+                    const int i=group.info.particle_index[j];
+                    ASSERT(i>=0 && i<_n_particle);
+                    ASSERT(members[i].group==-1);
+                    members[i].group=k;
+                    for (int d=0;d<3;++d) members[i].pos[d]=group.particles[j].pos[d];
+                }
+            }
+        }
         _energy.ekin = _energy.epot = _energy.epert = 0.0;
         for (int i=0; i<_n_particle; i++) {
             auto& pi = _particles[i];
@@ -481,9 +505,15 @@ public:
                 if (i==j) continue;
                 auto& pj = _particles[j];
                 if (pj.mass==0.0) continue;
-                const Float dr[3] = {pj.pos[0] - pi.pos[0], 
-                                     pj.pos[1] - pi.pos[1],
-                                     pj.pos[2] - pi.pos[2]};
+                // A common CM cancels analytically. Subtract in the group's
+                // local frame before adding that large offset loses precision.
+                // Preserve the global pair order, masses, softening and cutoff.
+                const bool same_group=members && members[i].group>=0
+                    && members[i].group==members[j].group;
+                const Float dr[3] = {
+                    same_group ? members[j].pos[0]-members[i].pos[0] : pj.pos[0]-pi.pos[0],
+                    same_group ? members[j].pos[1]-members[i].pos[1] : pj.pos[1]-pi.pos[1],
+                    same_group ? members[j].pos[2]-members[i].pos[2] : pj.pos[2]-pi.pos[2]};
                 Float dr2 = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2];
                 Float dr2_eps = dr2 + eps_sq;
                 const Float r = sqrt(dr2_eps);

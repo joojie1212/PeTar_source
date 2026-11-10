@@ -551,9 +551,17 @@ public:
             static thread_local std::vector<H4::NBAdr<PtclHard>::Group*> ptclgroup;
             changeover.resize(n_pert_single);
             ptclgroup.resize(n_pert_group);
+            static thread_local std::vector<int> group_offset;
+            static thread_local std::vector<Float> group_positions;
+            group_offset.resize(n_pert_group+1);
+            int n_group_members=0;
+            for(int j=0;j<n_pert;++j) if(pert_adr[j].type==H4::NBType::group)
+                n_group_members+=static_cast<H4::NBAdr<PtclHard>::Group*>(pert_adr[j].adr)->getSize();
+            group_positions.resize(3*n_group_members);
 
             int n_single_count=0;
             int n_group_count=0;
+            group_offset[0]=0;
             for (int j=0; j<n_pert; j++) {
                 H4::NBAdr<PtclHard>::Single* pertj;
                 int k; // index of predicted data
@@ -561,6 +569,13 @@ public:
                     pertj = &(((H4::NBAdr<PtclHard>::Group*)pert_adr[j].adr)->cm);
                     k = n_group_count + n_pert_single;
                     ptclgroup[n_group_count] = (H4::NBAdr<PtclHard>::Group*)pert_adr[j].adr;
+                    // Resolve the source once per force evaluation, before the
+                    // target-member loop. Reuse capacity without retaining state.
+                    ASSERT(pert_adr[j].predict_group_members!=nullptr);
+                    const int begin=group_offset[n_group_count];
+                    pert_adr[j].predict_group_members(pert_adr[j].group_integrator,
+                                                      group_positions.data()+3*begin,time);
+                    group_offset[n_group_count+1]=begin+ptclgroup[n_group_count]->getSize();
                     n_group_count++;
                 }
                 else {
@@ -623,26 +638,22 @@ public:
                     acc_pert[2] += gmor3 * dr[2];
 
                 }
-                // group perturber
-                for (int j=n_pert_single; j<n_pert; j++) {
-                    Float dr[3] = {xp[j][0] - xi[0],
-                                   xp[j][1] - xi[1],
-                                   xp[j][2] - xi[2]};
-                    Float r2 = dr[0]*dr[0] + dr[1]*dr[1] + dr[2]*dr[2] + eps_sq;
-                    Float r  = sqrt(r2);
-                    const int jk = j-n_pert_single;
-                    auto* ptcl_mem = ptclgroup[jk]->getDataAddress();
-                    Float mk = 0.0;
-                    for (int k=0; k<ptclgroup[jk]->getSize(); k++) {
-                        mk += ptcl_mem[k].mass * ChangeOver::calcAcc0WTwo(chi, ptcl_mem[k].changeover, r);
+                // Match Hermite's resolved source distribution. Each member
+                // has its own separation and changeover weight.
+                for (int j=n_pert_single; j<n_pert; ++j) {
+                    const int jk=j-n_pert_single;
+                    auto* members=ptclgroup[jk]->getDataAddress();
+                    for(int k=0;k<ptclgroup[jk]->getSize();++k) {
+                        if(members[k].mass<=0.0) continue;
+                        const Float* pos=group_positions.data()+3*(group_offset[jk]+k);
+                        Float dr[3];
+                        for(int d=0;d<3;++d) dr[d]=(xp[j][d]-xcm[d])+(pos[d]-pi.pos[d]);
+                        const Float r2=dr[0]*dr[0]+dr[1]*dr[1]+dr[2]*dr[2]+eps_sq;
+                        const Float r=sqrt(r2);
+                        const Float weight=ChangeOver::calcAcc0WTwo(chi,members[k].changeover,r);
+                        const Float factor=gravitational_constant*members[k].mass*weight/(r*r2);
+                        for(int d=0;d<3;++d) acc_pert[d]+=factor*dr[d];
                     }
-                    Float r3 = r*r2;
-                    Float gmor3 = gravitational_constant*mk/r3;
-
-                    acc_pert[0] += gmor3 * dr[0];
-                    acc_pert[1] += gmor3 * dr[1];
-                    acc_pert[2] += gmor3 * dr[2];
-
                 }
 
                 acc_pert_cm[0] += pi.mass *acc_pert[0];
@@ -685,6 +696,11 @@ public:
 
         }
         else {
+            // A disappearing neighbor list must not retain the last AR force.
+            for(int i=0;i<_n_particle;++i) {
+                _force[i].acc_pert[0]=_force[i].acc_pert[1]=_force[i].acc_pert[2]=0.0;
+                _force[i].pot_pert=0.0;
+            }
 #ifdef SOFT_PERT
             if(_perturber.soft_pert!=NULL) {
                 for(int i=0; i<_n_particle; i++) {
@@ -1069,12 +1085,11 @@ public:
 
 #ifdef BSE_BASE
             auto postProcess =[&](StarParameterOut* out, Float* pos_cm, Float*vel_cm, Float& semi, Float& ecc, int binary_type_final) {
-                // Only actual particle replacements need a resolved event audit.
+                // Orbit reconstruction also moves mass relative to external particles.
                 // BSE has updated star records, but dynamical mass/position are
                 // still the pre-event values at this point.
                 MergerPartitionEvent merger_partition(*p1,*p2,_bin_interrupt.time_now,
-                    p1->mass>0 && p2->mass>0
-                    && (bse_manager.getMass(p1->star)==0 || bse_manager.getMass(p2->star)==0));
+                    p1->mass>0 && p2->mass>0);
                 // if status not set, set to change
                 if (_bin_interrupt.status == AR::InterruptStatus::none)
                     _bin_interrupt.status = AR::InterruptStatus::change;

@@ -261,6 +261,97 @@ void testARPairKernelAndCache() {
 
 
 
+// A resolved neighbor must reproduce direct member forces at the requested
+// epoch, including backward prediction and slowdown-scaled orbital motion.
+void testResolvedGroupPerturbation() {
+#pragma omp parallel for
+    for(int worker=0;worker<4;++worker) {
+        using Group=AR::TimeTransformedSymplecticIntegrator<PtclHard,PtclH4,ARPerturber,ARInteraction,H4::ARInformation<PtclHard>>;
+        AR::TimeTransformedSymplecticManager<ARInteraction> manager;
+        manager.time_error_max=1e-10; manager.time_step_min=1e-12;
+        manager.energy_error_relative_max=1e-9; manager.slowdown_pert_ratio_ref=1e-4;
+        manager.slowdown_timescale_max=100.; manager.step_count_max=10000;
+        manager.step.initialSymplecticCofficients(6);
+        manager.interaction.gravitational_constant=1.; manager.interaction.eps_sq=0.;
+        manager.interaction.stellar_evolution_option=0;
+        manager.interaction.stellar_evolution_write_flag=false;
+        Group source; source.manager=&manager;
+        source.particles.setMode(COMM::ListMode::copy); source.particles.reserveMem(2);
+        source.info.reserveMem(2); source.info.r_break_crit=10.;
+        source.perturber.r_neighbor_crit_sq=100.;
+        PtclHard origin[2];
+        for(int k=0;k<2;++k) {
+            origin[k].DataCopy(sampleParticle(100+k)); origin[k].mass=k+1.;
+            origin[k].pos=PS::F64vec(k?0.2:-0.4,0,0);
+            origin[k].vel=PS::F64vec(0,k?0.2:-0.4,0);
+            origin[k].changeover.setR(0.2+0.1*k,2.+k);
+            source.particles.addMemberAndAddress(origin[k]);
+        }
+        source.reserveIntegratorMem();
+        source.info.generateBinaryTree(source.particles,1.);
+        source.initialIntegration(7.);
+        source.info.getBinaryTreeRoot().slowdown.setSlowDownFactor(4.);
+        // Deliberately desynchronize the Hermite CM epoch from the AR epoch.
+        source.particles.cm.time=5.; source.particles.cm.pos=PS::F64vec(1.,0.3,0.);
+        source.particles.cm.vel=PS::F64vec(0.1,-0.2,0.05);
+        for(int d=0;d<3;++d) source.particles.cm.acc0[d]=source.particles.cm.acc1[d]=0.;
+        auto adr=H4::NBAdr<PtclHard>::fromGroup(source,2);
+        H4::NBAdr<PtclHard> copied; copied=adr;
+        ARPerturber pert; pert.reserveMem(2); pert.n_neighbor_group=1;
+        pert.neighbor_address.addMember(copied);
+        PtclH4 target_cm; target_cm.mass=3.; target_cm.time=7.;
+        target_cm.pos=target_cm.vel=PS::F64vec(0.);
+        for(int d=0;d<3;++d) target_cm.acc0[d]=target_cm.acc1[d]=0.;
+        PtclHard target[2]; AR::Force force[2];
+        for(int k=0;k<2;++k) {
+            target[k].DataCopy(sampleParticle(200+k)); target[k].mass=k+1.;
+            target[k].pos=PS::F64vec(k?0.1:-0.2,0.15,0.);
+            target[k].changeover.setR(0.1,2.5);
+        }
+        for(double t: {6.9,7.,7.1}) {
+            Float positions[6]; copied.predict_group_members(copied.group_integrator,positions,t);
+            for(int k=0;k<2;++k) for(int d=0;d<3;++d)
+                assert(std::abs(positions[3*k+d]-source.particles[k].pos[d]
+                       -(t-7.)*source.particles[k].vel[d]/4.)<1e-14);
+            manager.interaction.calcAccPert(force,target,2,target_cm,pert,t);
+            PS::F64vec direct[2]={PS::F64vec(0.),PS::F64vec(0.)};
+            const auto cm=source.particles.cm.pos+(t-5.)*source.particles.cm.vel;
+            for(int i=0;i<2;++i) for(int j=0;j<2;++j) {
+                PS::F64vec pos(positions[3*j],positions[3*j+1],positions[3*j+2]);
+                auto dr=cm+pos-target[i].pos; double r=std::sqrt(dr*dr);
+                direct[i]+=source.particles[j].mass*ChangeOver::calcAcc0WTwo(
+                    target[i].changeover,source.particles[j].changeover,r)*dr/(r*r*r);
+            }
+            auto mean=(direct[0]+2.*direct[1])/3.;
+            for(int i=0;i<2;++i) for(int d=0;d<3;++d) {
+                assert(std::abs(force[i].acc_pert[d]-(direct[i][d]-mean[d]))<2e-13);
+                assert(std::abs(force[0].acc_pert[d]+2.*force[1].acc_pert[d])<2e-13);
+            }
+        }
+        // Removing all neighbors must not reuse the previous call's sources.
+        pert.resetNeighbor(); manager.interaction.calcAccPert(force,target,2,target_cm,pert,7.);
+        for(auto& f:force) for(double a:f.acc_pert) assert(a==0.);
+    }
+}
+
+void testTreeSourceMassGuard() {
+    Ptcl::group_data_mode=GroupDataMode::artificial;
+    std::vector<FPSoft> p(3);
+    for(int i=0;i<3;++i)p[i]=sampleParticle(i+1);
+    p[0].group_data.artificial.setParticleTypeToMember(7.);
+    p[0].setParticleCMAddress(10); p[0].mass=7.;
+    p[1].group_data.artificial.setParticleTypeToMember(3.);
+    p[1].mass=3.;
+    const auto metadata=p[0].group_data;
+    {
+        TreeSourceMassGuard guard; guard.mask(p,p.size());
+        assert(p[0].mass==0 && p[1].mass==3 && p[2].mass==1);
+        {TreeSourceMassGuard nested; nested.mask(p,p.size());}
+        assert(p[0].mass==0);
+    }
+    assert(p[0].mass==7 && p[0].group_data.artificial.getMassBackup()==metadata.artificial.getMassBackup());
+}
+
 void testSynchronizedPartitionCache() {
     ForceSoft::grav_const=1.; EPISoft::eps=0.; EPISoft::r_out=1.;
     struct ParticleArray: std::vector<FPSoft> {
@@ -343,6 +434,31 @@ void testMergerPartitionAccounting() {
         }
         return e;
     };
+    // Non-merging reconstruction: conserve pair mass and CM, but move its
+    // members relative to a nearby group-external particle.
+    {
+        const auto before=p;
+        p[3].pos=PS::F64vec(0.6,0.3,0.);
+        const auto event_before=p;
+        const double pending=p[0].changeover.r_scale_next;
+        {
+            MergerPartitionEvent event(p[0],p[1],1.,false);
+            event.state=event_before; event.in_group={1,1,1,0};
+            event.first_index=0; event.second_index=1;
+            event.bound.owner=&integrator;
+            event.bound.finish=&HardIntegrator::finishMergerPartition;
+            p[0].pos.x+=0.1; p[1].pos.x-=0.05;
+        } // Destructor must dispatch even though neither particle disappeared.
+        const double hard=energy(p,0)-energy(event_before,0);
+        const double internal=energy(p,2)-energy(event_before,2);
+        const double soft=energy(p,1)-energy(event_before,1);
+        assert(std::abs(hard-internal)>1e-4);
+        assert(std::abs(integrator.merger_partition_correction-(hard-internal))<1e-11);
+        assert(std::abs(integrator.merger_soft_correction-soft)<1e-11);
+        assert(p[0].changeover.r_scale_next==pending);
+        integrator.merger_partition_correction=integrator.merger_soft_correction=0;
+        p=before;
+    }
     double expected_hard=0, expected_soft=0;
     for(int victim: {1,2}) {
         const auto before=p;
@@ -373,11 +489,96 @@ void testMergerPartitionAccounting() {
     integrator.manager=nullptr;
 }
 
+// Minimal active-group view for the real Hermite energy kernel (no SOFT_PERT
+// in this test build). Sparse slots and non-contiguous member indices matter.
+struct EnergyTestParticles: std::vector<PtclHard> {
+    int getSize() const { return int(size()); }
+};
+struct EnergyTestGroup {
+    EnergyTestParticles particles;
+    struct { std::vector<int> particle_index; } info;
+};
+void testLocalGroupEnergy() {
+    HermiteInteraction interaction;
+    interaction.gravitational_constant=1.; interaction.eps_sq=0.;
+    PtclHard p[6];
+    for(int i=0;i<6;++i) {
+        p[i].DataCopy(sampleParticle(i+1));
+        p[i].vel=PS::F64vec(0.); p[i].mass=1.;
+        p[i].changeover.setR(0.1,1.);
+    }
+    EnergyTestGroup groups[4]; int indices[2]={3,1};
+    groups[3].info.particle_index={0,1};
+    groups[3].particles.assign({p[0],p[1]});
+    groups[3].particles[0].pos=PS::F64vec(-0.5e-10,0.,0.);
+    groups[3].particles[1].pos=PS::F64vec(0.5e-10,0.,0.);
+    H4::HermiteEnergy e;
+    for(double center: {0.,1e-4,1.}) {
+        for(int i=0;i<2;++i)p[i].pos=groups[3].particles[i].pos+PS::F64vec(center,0.,0.);
+        interaction.calcEnergy(e,p,2,groups,indices,1,0);
+        assert(std::abs(e.epot/(-1e10)-1.)<1e-14);
+    }
+    // Two active groups, one with three members, one external single.
+    groups[3].info.particle_index={0,2,4};
+    groups[1].info.particle_index={3,1};
+    const int owner[6]={0,1,0,1,0,-1};
+    PS::F64vec local[6];
+    for(int i=0;i<6;++i) {
+        local[i]=PS::F64vec(.03*i,.01*i*i,0.);
+        p[i].pos=local[i]+PS::F64vec(owner[i]==0?1e4:owner[i]==1?1e4+0.5:1e4+2.,0.,0.);
+        p[i].changeover.setR(.1+.01*i,1.+.1*i);
+    }
+    for(int k=0;k<2;++k) {
+        auto& g=groups[indices[k]];g.particles.clear();
+        for(int i:g.info.particle_index) {g.particles.push_back(p[i]);g.particles.back().pos=local[i];}
+    }
+    for(double eps2: {0.,.01}) {
+        interaction.eps_sq=eps2;
+        double expected=0.;
+        for(int i=0;i<6;++i)for(int j=0;j<i;++j) {
+            const auto dr=owner[i]>=0 && owner[i]==owner[j]?local[i]-local[j]:p[i].pos-p[j].pos;
+            const double r=std::sqrt(dr*dr+eps2);
+            expected-=ChangeOver::calcPotWTwo(p[i].changeover,p[j].changeover,r)/r;
+        }
+        interaction.calcEnergy(e,p,6,groups,indices,2,0);
+        assert(std::abs(e.epot-expected)<1e-12);
+    }
+    // Dropping all groups must ignore stale scratch membership.
+    double expected=0.;
+    for(int i=0;i<6;++i)for(int j=0;j<i;++j) {
+        const auto dr=p[i].pos-p[j].pos;const double r=std::sqrt(dr*dr+interaction.eps_sq);
+        expected-=ChangeOver::calcPotWTwo(p[i].changeover,p[j].changeover,r)/r;
+    }
+    interaction.calcEnergy(e,p,6,groups,indices,0,0);
+    assert(std::abs(e.epot-expected)<1e-12);
+}
+
+void testHardEnergyWarning() {
+    const double eps=1e-3;
+    // Nearly cancelling energy: retain the residual, suppress only its warning.
+    HardEnergyWarning small(-0.155972,3759470.,-3759466.66394,3.33606);
+    assert(small.floor_used && !small.significant(eps));
+    // The real unbooked orbital event must remain detectable.
+    HardEnergyWarning missed(-16576.7,38762900.,-52849400.,-14086500.);
+    assert(!missed.floor_used && missed.significant(eps));
+    assert(HardEnergyWarning(100.,1e6,-1e6,0.).significant(eps));
+    assert(!HardEnergyWarning(0.,0.,0.,0.).significant(eps));
+    assert(HardEnergyWarning(std::numeric_limits<double>::quiet_NaN(),1.,-1.,0.).significant(eps));
+    assert(HardEnergyWarning(1.,std::numeric_limits<double>::infinity(),-1.,0.).significant(eps));
+    // The scale remains finite even when the unscaled component sum overflows.
+    HardEnergyWarning large(1.,1e308,-1e308,0.);
+    assert(std::isfinite(large.denominator));
+}
+
 int main(int argc,char** argv) {
     PeTar::initialFDPS(argc,argv); omp_set_num_threads(4);
+    testTreeSourceMassGuard();
     testSynchronizedPartitionCache();
     testMergerPartitionAccounting();
+    testHardEnergyWarning();
+    testLocalGroupEnergy();
     testARPairKernelAndCache();
+    testResolvedGroupPerturbation();
     testRestartAndPrint(); testRestartClock(); testNeighborAndIdMap(); testSimdHeapBuffer();
     testEscaperReduction(); testBSEUnitsAndMass(); testOutputProtectionAndTitles();
     PeTar::finalizeFDPS(); std::cout<<"integration regressions passed\n";

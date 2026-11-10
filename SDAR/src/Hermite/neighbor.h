@@ -18,6 +18,9 @@ namespace H4 {
         void* adr;
         int index;
         NBType type; // -1: undefine; 0: H4particle; 1: ParticleGroup
+        // Non-owning, rebuilt with the neighbor list; never serialized.
+        void* group_integrator = nullptr;
+        void (*predict_group_members)(void*, Float*, Float) = nullptr;
             
         NBAdr(): adr(NULL), index(-1), type(NBType::none) {}
 
@@ -25,10 +28,22 @@ namespace H4 {
 
         NBAdr(Group* _adr, const int _index): adr((void*)_adr), index(_index), type(NBType::group) {}
 
+        template<class Tgroup>
+        static NBAdr fromGroup(Tgroup& group, const int index) {
+            NBAdr result(&group.particles,index);
+            result.group_integrator=&group;
+            result.predict_group_members=[](void* ptr, Float* positions, Float time) {
+                static_cast<Tgroup*>(ptr)->predictSlowDownMemberPositions(positions,time);
+            };
+            return result;
+        }
+
         NBAdr& operator = (const NBAdr& _nb) {
             adr = _nb.adr;
             index =_nb.index;
             type = _nb.type;
+            group_integrator = _nb.group_integrator;
+            predict_group_members = _nb.predict_group_members;
             return *this;
         }
         
@@ -178,7 +193,7 @@ namespace H4 {
         void checkAndAddNeighborGroup(const Float _r2, Tgroup& _group, const int _index) {
             ASSERT(_r2>0.0);
             if (_r2<std::max(r_neighbor_crit_sq, _group.perturber.r_neighbor_crit_sq)) {
-                neighbor_address.addMember(NBAdr<Tparticle>(&_group.particles,_index));
+                neighbor_address.addMember(NBAdr<Tparticle>::fromGroup(_group,_index));
                 n_neighbor_group++;
             }
             // mass weighted nearest neigbor

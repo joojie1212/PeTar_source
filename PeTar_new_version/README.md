@@ -1133,6 +1133,8 @@ During a simulation, users may encounter warning and error messages in the print
 
 In scenarios involving a particle cluster with short-range interaction (utilizing Hermite+SDAR), if the relative energy error exceeds the threshold specified by the `--energy-err-hard` option of `petar` (default value: 0.0001) during one tree time step, a warning message titled "Hard energy significant" is triggered, and a corresponding dump file named "hard\_large\_energy.*" is created.
 
+The warning normalizes the slowdown energy residual by `max(1, |E_SD|, 1e-3*(|K_SD|+|U_SD|))`. The component-based floor avoids an ill-conditioned relative error when kinetic and potential energy nearly cancel. Warning output includes the normalized error, denominator, and whether this floor is active; the raw residual and cumulative energy accounting are unchanged. This criterion does not control AR integration steps.
+
 This issue commonly arises when a triple or quadruple system exists within the particle system. The large error can be attributed to two main possibilities:
 - The inner binaries of these systems may exhibit tight configurations with substantial slowdown factors. As the slowdown Hamiltonian differs from the classical Hamiltonian, physical energy conservation is not guaranteed during integration, focusing instead on ensuring correct secular motion.
 - The integration step of the SDAR method might not be sufficiently small for multiple systems. While reducing step sizes can enhance accuracy, it also leads to a notable increase in computational time.

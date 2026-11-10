@@ -5,6 +5,8 @@
 
 #include"cstdlib"
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 #include"AR/symplectic_integrator.h"
 #include"Hermite/hermite_integrator.h"
@@ -21,6 +23,26 @@
 #include"stability.hpp"
 
 typedef H4::ParticleH4<PtclHard> PtclH4;
+
+// Warning normalization only: never used for AR stepping or its energy reference.
+struct HardEnergyWarning {
+    static constexpr double cancellation_floor = 1e-3;
+    double denominator, relative_error;
+    bool floor_used, finite;
+    HardEnergyWarning(double de,double ekin,double epot,double etot) {
+        finite=std::isfinite(de) && std::isfinite(ekin)
+            && std::isfinite(epot) && std::isfinite(etot);
+        // Scale before summing to avoid overflow in |K|+|U|.
+        const double floor=cancellation_floor*std::abs(ekin)
+                          +cancellation_floor*std::abs(epot);
+        const double original=std::max(1.0,std::abs(etot));
+        floor_used=floor>original;
+        denominator=std::max(original,floor);
+        relative_error=finite ? std::abs(de)/denominator
+                              : std::numeric_limits<double>::infinity();
+    }
+    bool significant(double tolerance) const { return !finite || relative_error>tolerance; }
+};
 
 //! Hard integrator parameter manager
 class HardManager{
@@ -279,6 +301,9 @@ public:
             }
         }
         self.merger_soft_correction+=soft_change;
+        // Non-merging orbital updates change energy bookkeeping only. Preserve
+        // their current and pending cutoffs and search radii.
+        if(event.first->mass>0 && event.second->mass>0)return;
         // Only schedule the new split. Current forces/radii stay valid until
         // the synchronized tree boundary. Group construction may override it.
         for(PtclHard* p: {event.first,event.second}) if(p->mass>0) {
@@ -970,10 +995,16 @@ public:
                     h4_int.printColumn(std::cout, WRITE_WIDTH, n_group_sub_init.getPointer(), n_group_sub_init.size(), n_group_sub_tot_init);
                     std::cout<<std::endl;
 
-                    PS::F64 de_sd   = h4_int.getEnergyErrorSlowDown();
-                    if (abs(de_sd/std::max(1.0,abs(h4_int.getEtotSlowDownRef()))) > manager->energy_error_max) {
+                    PS::F64 de_sd = h4_int.getEnergyErrorSlowDown()-merger_partition_correction;
+                    const double etot_ref=h4_int.getEtotSlowDownRef()+merger_partition_correction;
+                    const HardEnergyWarning warning(de_sd,h4_int.getEkinSlowDown(),
+                                                    h4_int.getEpotSlowDown(),etot_ref);
+                    if (warning.significant(manager->energy_error_max)) {
                         std::cerr<<"Hard energy significant!"
-                                 <<"  dE_SD/Etot_SD "<<de_sd/h4_int.getEtotSlowDownRef()
+                                 <<"  dE_SD/Etot_SD "<<(etot_ref!=0 ? de_sd/etot_ref : std::numeric_limits<double>::infinity())
+                                 <<"  normalized_error: "<<warning.relative_error
+                                 <<"  energy_scale: "<<warning.denominator
+                                 <<"  cancellation_floor: "<<warning.floor_used
                                  <<"  Ekin: "<<h4_int.getEkin()
                                  <<"  Epot: "<<h4_int.getEpot()
                                  <<"  Ekin_SD: "<<h4_int.getEkinSlowDown()
@@ -1358,7 +1389,13 @@ public:
                  <<"  ARC_tsyn_step_sum: "<<ARC_tsyn_step_sum
                  <<std::endl;
 #endif        
-        if (abs(energy.de_sd/std::max(1.0,abs(ekin_sd+epot_sd))) > manager->energy_error_max) {
+        const HardEnergyWarning warning(energy.de_sd,ekin_sd,epot_sd,ekin_sd+epot_sd);
+#ifdef HARD_DEBUG_PRINT
+        std::cerr<<"Hard energy check: normalized_error="<<warning.relative_error
+                 <<" energy_scale="<<warning.denominator
+                 <<" cancellation_floor="<<warning.floor_used<<std::endl;
+#endif
+        if (warning.significant(manager->energy_error_max)) {
             // avoid division by zero / inf
             double etot_sd = ekin_sd + epot_sd;
             double safe_denom = (std::fabs(etot_sd) < 1e-300) ? 1.0 : etot_sd;
@@ -1367,6 +1404,9 @@ public:
                      <<" dE_SD: "<<energy.de_sd
                      <<" dE_SD/Etot_SD: "<<(denom_is_small? std::numeric_limits<double>::infinity() : energy.de_sd/safe_denom)
                      <<" (Etot_SD="<<etot_sd<<")"
+                     <<" normalized_error: "<<warning.relative_error
+                     <<" energy_scale: "<<warning.denominator
+                     <<" cancellation_floor: "<<warning.floor_used
                      <<std::endl;
 #ifdef HARD_DUMP
             DATADUMP("hard_large_energy");
@@ -1578,6 +1618,15 @@ private:
 
         const PS::F64vec dr = _pi.pos - _pj.pos;
         const PS::F64 dr2 = dr * dr;
+        // Paired quadrupole sources intentionally coincide. Their soft
+        // acceleration is zero here; their artificial potential must still be
+        // removed from the linear-cutoff tree cache. Do not evaluate 0 * inf.
+        if (dr2==0.0 && _pj.group_data.artificial.isArtificial()) {
+            const PS::F64 pot_cor = G*_pj.mass/std::max(EPISoft::eps, EPISoft::r_out);
+            _pi.pot_soft += pot_cor;
+            _pi.pot_tot += pot_cor;
+            return;
+        }
         const PS::F64 dr2_eps = dr2 + eps_sq;
         const PS::F64 drinv = 1.0/sqrt(dr2_eps);
         PS::F64 gmor = G*_pj.mass * drinv;
@@ -1653,6 +1702,15 @@ private:
 
         const PS::F64vec dr = _pi.pos - _pj.pos;
         const PS::F64 dr2 = dr * dr;
+        // Paired quadrupole sources intentionally coincide. Their soft
+        // acceleration is zero here; their artificial potential must still be
+        // removed from the linear-cutoff tree cache. Do not evaluate 0 * inf.
+        if (dr2==0.0 && _pj.group_data.artificial.isArtificial()) {
+            const PS::F64 pot_cor = G*_pj.mass/std::max(EPISoft::eps, EPISoft::r_out);
+            _pi.pot_soft += pot_cor;
+            _pi.pot_tot += pot_cor;
+            return;
+        }
 #ifdef HARD_DEBUG
         assert(dr2>0.0);
 #endif
@@ -1732,6 +1790,7 @@ private:
 
         const PS::F64vec dr = _pi.pos - _pj.pos;
         const PS::F64 dr2 = dr * dr;
+        if (dr2==0.0 && _pj.group_data.artificial.isArtificial()) return;
 #ifdef HARD_DEBUG
         assert(dr2>0.0);
 #endif
@@ -1768,6 +1827,7 @@ private:
 
         const PS::F64vec dr = _pi.pos - _pj.pos;
         const PS::F64 dr2 = dr * dr;
+        if (dr2==0.0 && _pj.group_data.artificial.isArtificial()) return;
         const PS::F64 dr2_eps = dr2 + eps_sq;
         const PS::F64 drinv = 1.0/sqrt(dr2_eps);
         const PS::F64 gmor = G*_pj.mass * drinv;
@@ -1793,13 +1853,20 @@ private:
 #ifdef KDKDK_4TH
     template <class Tpi>
     static void calcAcorrShortWithLinearCutoff(Tpi& _pi,
-                                               const Ptcl& _pj) {
+                                               const FPSoft& _pj) {
         const PS::F64 G = ForceSoft::grav_const;
         const PS::F64 eps_sq = EPISoft::eps * EPISoft::eps;
 
         const PS::F64vec dr = _pi.pos - _pj.pos;
         const PS::F64vec da = _pi.acc - _pj.acc;
         const PS::F64 dr2 = dr * dr;
+        // At a coincident artificial source the unsoftened soft force and
+        // its derivative vanish. Remove only the linear-cutoff derivative.
+        if (dr2==0.0 && eps_sq==0.0 && _pj.group_data.artificial.isArtificial()) {
+            const PS::F64 rout = EPISoft::r_out;
+            _pi.acorr += (2.0*G*_pj.mass/(rout*rout*rout))*da;
+            return;
+        }
         const PS::F64 dr2_eps = dr2 + eps_sq;
         const PS::F64 drda = dr*da;
         const PS::F64 drinv = 1.0/sqrt(dr2_eps);
@@ -1861,6 +1928,13 @@ private:
         const PS::F64vec dr = _pi.pos - _pj.pos;
         const PS::F64vec da = _pi.acc - _pj.acc;
         const PS::F64 dr2 = dr * dr;
+        // At a coincident artificial source the unsoftened soft force and
+        // its derivative vanish. Remove only the linear-cutoff derivative.
+        if (dr2==0.0 && eps_sq==0.0 && _pj.group_data.artificial.isArtificial()) {
+            const PS::F64 rout = EPISoft::r_out;
+            _pi.acorr += (2.0*G*_pj.mass/(rout*rout*rout))*da;
+            return;
+        }
         const PS::F64 dr2_eps = dr2 + eps_sq;
         const PS::F64 drda = dr*da;
         const PS::F64 drinv = 1.0/sqrt(dr2_eps);
@@ -2930,7 +3004,9 @@ public:
                 Tptcl* ptcl_orbit=ap_manager.getOrbitalParticles(ptcl_artificial_i);
                 PS::S32 n_orbit = ap_manager.getOrbitalParticleN();
                 for (int j=0; j<n_orbit; j++) {
-                    // use member changeover, if new changeover is different, record the scale ratio 
+                    // Both orbital sampling and paired quadrupole sources use
+                    // alternating member masses as well as member changeovers.
+                    // If the new changeover differs, record the scale ratio.
                     Tptcl& pj = ptcl_orbit[j];
                     pj.changeover =  binary_stable_i.getMember(j%2)->changeover;
 

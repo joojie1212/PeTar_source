@@ -1332,7 +1332,7 @@ namespace H4{
                 for (int j=0; j<_n_group; j++) {
                     const int jk = group_index[j];
                     if (k==jk) continue;
-                    nbk.neighbor_address.addMember(NBAdr<Tparticle>(&groups[jk].particles, jk+index_offset_group_));
+                    nbk.neighbor_address.addMember(NBAdr<Tparticle>::fromGroup(groups[jk], jk+index_offset_group_));
                     nbk.n_neighbor_group++;
                 }
             }

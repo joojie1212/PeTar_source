@@ -177,6 +177,7 @@ namespace AR {
     class TimeTransformedSymplecticIntegrator {
     private:
         // intergrated variables
+        bool member_prediction_ready_ = false; // transient, not serialized
         Float time_;   ///< integrated time (not the physical time, it is always 0 initially)
         Float etot_ref_; ///< integrated system energy
 
@@ -269,6 +270,7 @@ namespace AR {
         /*! Free dynamical memory space allocated
          */
         void clear() {
+            member_prediction_ready_ = false;
 #if defined(AR_TTL) && defined(AR_SLOWDOWN_TREE)
             slowdown_recovery_active_ = false;
 #endif
@@ -1720,6 +1722,7 @@ namespace AR {
             etot_ref_ = ekin_ + epot_;
 
 #endif
+            member_prediction_ready_ = true;
         }
 
         //! integration for one step
@@ -3006,6 +3009,57 @@ namespace AR {
             return bin_interrupt_return;
         }
 
+        // Predict local member positions from their own AR epoch, not cm.time
+        // (Hermite can leave the CM at an older epoch). This read-only linear
+        // prediction supports both forward and backward asynchronous queries.
+#ifdef AR_SLOWDOWN_TREE
+        void predictSlowDownMemberPositionsIter(Float* positions, const Float dt,
+                                                const Float* velocity_up,
+                                                const Float inv_sd_up,
+                                                AR::BinaryTree<Tparticle>& bin) {
+            const Float inv_sd=inv_sd_up/bin.slowdown.getSlowDownFactor();
+            for(int k=0;k<2;++k) {
+                auto* child=bin.isMemberTree(k)?bin.getMemberAsTree(k):nullptr;
+                const int i=child?-1:bin.getMemberIndex(k);
+                const Float* velocity=child?child->getVel():particles[i].getVel();
+                Float v[3];
+                for(int d=0;d<3;++d)
+                    v[d]=(velocity[d]-bin.vel[d])*inv_sd+velocity_up[d];
+                if(child) predictSlowDownMemberPositionsIter(positions,dt,v,inv_sd,*child);
+                else for(int d=0;d<3;++d)
+                    positions[3*i+d]=particles[i].pos[d]+dt*v[d];
+            }
+        }
+#endif
+        void predictSlowDownMemberPositions(Float* positions, const Float time) {
+            ASSERT(!particles.isOriginFrame());
+            const Float dt=time-(member_prediction_ready_?time_:particles.cm.time);
+            // Before initialIntegration the group has no slowdown history yet.
+            Float inv_sd=1.0;
+#ifdef AR_SLOWDOWN_ARRAY
+            if(member_prediction_ready_) inv_sd=1.0/binary_slowdown[0]->slowdown.getSlowDownFactor();
+#endif
+            for(int i=0;i<particles.getSize();++i)
+                for(int d=0;d<3;++d)
+                    positions[3*i+d]=particles[i].pos[d]+dt*inv_sd*particles[i].vel[d];
+#ifdef AR_SLOWDOWN_TREE
+            if(member_prediction_ready_) {
+                const Float zero[3]={0,0,0};
+                predictSlowDownMemberPositionsIter(positions,dt,zero,1.0,info.getBinaryTreeRoot());
+            }
+#elif defined(AR_SLOWDOWN_ARRAY)
+            if(member_prediction_ready_) for(int k=1;k<binary_slowdown.getSize();++k) {
+                auto& bin=*binary_slowdown[k];
+                const Float factor=(1.0/bin.slowdown.getSlowDownFactor()-1.0)*inv_sd;
+                for(int j=0;j<2;++j) {
+                    const int i=bin.getMemberIndex(j);
+                    for(int d=0;d<3;++d)
+                        positions[3*i+d]+=dt*factor*(particles[i].vel[d]-bin.vel[d]);
+                }
+            }
+#endif
+        }
+
         //! correct CM drift
         /*! calculate c.m. and correct the member data to the c.m. frame.
           This is used after the perturbation, in case the c.m. drift when members are in c.m. frame
@@ -3748,6 +3802,7 @@ namespace AR {
             perturber.readBinary(_fin);
             info.readBinary(_fin);
             profile.readBinary(_fin);
+            member_prediction_ready_ = true;
         }
 
     };
