@@ -16,6 +16,33 @@ struct EscapeCandidate {
 };
 
 namespace EscapeRemoval {
+struct MassCenter {
+    PS::F64 mass=0.0;
+    PS::F64vec pos=0.0, vel=0.0;
+};
+
+// Use synchronized real particles in their current coordinate frame. Never
+// use signed soft-potential weights or the extrapolated status center here.
+template<class Particles>
+MassCenter massCenter(const Particles& particles, PS::S64 n) {
+    MassCenter c;
+    for (PS::S64 i=0; i<n; ++i) {
+        const auto& p=particles[i];
+        if (p.mass<=0.0) continue;
+        c.mass+=p.mass;
+        c.pos+=p.mass*p.pos;
+        c.vel+=p.mass*p.vel;
+    }
+    c.mass=PS::Comm::getSum(c.mass);
+    c.pos=PS::Comm::getSum(c.pos);
+    c.vel=PS::Comm::getSum(c.vel);
+    if (c.mass>0.0) {
+        c.pos/=c.mass;
+        c.vel/=c.mass;
+    }
+    return c;
+}
+
 inline void sumPotentials(const std::vector<double>& local, std::vector<double>& global) {
     if(local.empty()) return;
 #ifdef PARTICLE_SIMULATOR_MPI_PARALLEL

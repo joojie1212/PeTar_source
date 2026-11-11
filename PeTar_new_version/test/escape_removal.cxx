@@ -18,7 +18,7 @@ double directEnergy(const std::vector<P>& p,double G,double eps2) {
 }
 void run(const std::string& name,const std::vector<P>& all,std::vector<long long> expected,
          double radius=5,double G=1,double eps2=0,bool check_energy=true,
-         std::vector<long long> forced={},PS::F64vec cmvel=0.0) {
+         std::vector<long long> forced={},PS::F64vec cmvel=0.0,PS::F64vec cmpos=0.0) {
     PeTar sim;
     const int rank=PS::Comm::getRank(),nr=PS::Comm::getNumberOfProc();
     // FDPS 7's tree destructor assumes initialize() has allocated its buffers.
@@ -29,7 +29,7 @@ void run(const std::string& name,const std::vector<P>& all,std::vector<long long
     for(size_t i=0;i<all.size();++i) if(int(i)%nr==rank) local.push_back(all[i]);
     sim.system_soft.setNumberOfParticleLocal(local.size());
     sim.stat.n_real_loc=local.size();sim.stat.n_real_glb=all.size();
-    sim.stat.pcm.pos=0.;sim.stat.pcm.vel=cmvel;
+    sim.stat.pcm.pos=cmpos;sim.stat.pcm.vel=cmvel;
     sim.stat.time=1.;sim.input_parameters.gravitational_constant.value=G;
     sim.input_parameters.eps.value=std::sqrt(eps2);sim.input_parameters.write_style.value=0;
     sim.escaper.r_escape_sq=radius*radius;sim.escaper.check_energy_flag=check_energy;
@@ -98,7 +98,9 @@ int main(int argc,char**argv) {
         run("single_escape",{core,particle(2,1,PS::F64vec(10,0,0),PS::F64vec(10,0,0))},{2});
         aa=a;bb=b;aa.pos.y=bb.pos.y=0;aa.pos.x=4.99;bb.pos.x=5.03;
         aa.vel=PS::F64vec(10,3,0);bb.vel=PS::F64vec(10,-3,0);
-        run("pair_cm_out_member_inside",{core,aa,bb},{2,3});
+        auto centered_core=core;
+        centered_core.pos.x=-(aa.pos.x+bb.pos.x)/core.mass;
+        run("pair_cm_out_member_inside",{centered_core,aa,bb},{2,3});
         aa.pos.x=4.97;bb.pos.x=5.01;
         run("pair_cm_inside_member_out",{core,aa,bb},{});
         aa=a;bb=b;aa.vel=PS::F64vec(100,0,0);bb.vel=PS::F64vec(0);
@@ -113,6 +115,16 @@ int main(int argc,char**argv) {
         run("two_pairs_cross_energy",{core,a,b,aa,bb},{2,3,4,5});
         auto z=particle(9,0,PS::F64vec(2,0,0),PS::F64vec(0));
         run("unused_zero_mass",{core,z},{9});
+        // A runaway status center previously deleted this compact bound pair.
+        // Positive soft potentials are also deliberately assigned by run().
+        auto c1=particle(11,30,PS::F64vec(-.01,0,0),PS::F64vec(0));
+        auto c2=particle(12,30,PS::F64vec(.01,0,0),PS::F64vec(0));
+        run("ignore_runaway_status_center",{c1,c2},{},.1,1,0,true,{},
+            PS::F64vec(1000,-500,100),PS::F64vec(10,20,-30));
+        c1.pos+=PS::F64vec(50,-20,10);c2.pos+=PS::F64vec(50,-20,10);
+        c1.vel=c2.vel=PS::F64vec(100,-200,300);
+        run("translated_boosted_mass_center",{c1,c2},{},.1);
+        run("empty_population",{},{});
     }
     PeTar::finalizeFDPS();
 }

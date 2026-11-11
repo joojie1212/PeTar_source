@@ -2849,9 +2849,10 @@ public:
         std::unordered_set<PS::S64> forced_ids;
         for(PS::S32 k=0;k<remove_list.size();++k)
             forced_ids.insert(system_soft[remove_list[k]].id);
-        PS::F64vec center_pos=stat.pcm.pos, center_vel=stat.pcm.vel, energy_vel_offset=0.0;
+        const auto escape_center=EscapeRemoval::massCenter(system_soft,stat.n_real_loc);
+        const PS::F64vec center_pos=escape_center.pos, center_vel=escape_center.vel;
+        PS::F64vec energy_vel_offset=0.0;
 #ifdef RECORD_CM_IN_HEADER
-        center_pos=center_vel=PS::F64vec(0.0);
         energy_vel_offset=stat.pcm.vel;
 #endif
         auto pack = [&](const auto& p) {
@@ -2894,9 +2895,13 @@ public:
 #ifdef GALPY
         if(!candidates.empty()) galpy_manager.updatePotential(stat.time,true);
         for(size_t k=0;k<candidates.size();++k) {
-            auto global=candidates[k].pos,relative=candidates[k].pos-center_pos;
+            // Galpy's moving-potential frame remains the status frame, not
+            // the independently computed escape-selection mass center.
+            auto global=candidates[k].pos,relative=candidates[k].pos;
 #ifdef RECORD_CM_IN_HEADER
             global+=stat.pcm.pos;
+#else
+            relative-=stat.pcm.pos;
 #endif
             double acc[3],pot;
             // gm=0: read the current external potential without adding a
@@ -4553,6 +4558,12 @@ public:
         // ensure it is initialized
         assert(initial_step_flag);
 
+        if (stat.n_real_glb==0
+#ifdef DARKMATTER
+            && !darkMatterEnabled()
+#endif
+            ) return 0;
+
         // for one particle case
         if (stat.n_real_glb==1
 #ifdef DARKMATTER
@@ -4585,6 +4596,22 @@ public:
 
             // remove artificial and ununsed particles in system_soft.
             removeParticles();
+
+            // Deletion can empty every rank. Do not construct a Morton tree
+            // from the negative-volume empty bounding box.
+            if (stat.n_real_glb==0
+#ifdef DARKMATTER
+                && !darkMatterEnabled()
+#endif
+                ) {
+#ifdef PROFILE
+                profile.total.end();
+#endif
+                if (my_rank==0)
+                    std::cout << "All stellar particles removed; stopping at time "
+                              << std::setprecision(17) << stat.time << std::endl;
+                return 0;
+            }
 
 #ifdef RECORD_CM_IN_HEADER
             // update center

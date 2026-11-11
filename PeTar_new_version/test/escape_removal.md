@@ -68,3 +68,36 @@ Build with `-D ESCAPE_REMOVAL_DEBUG` to emit an `ESCAPE_REMOVAL` line on rank 0 
 each positive-mass deletion batch, containing time, count, energy correction and
 IDs with their recognized companions. The regression target enables this flag;
 normal builds do not add these verbose records.
+
+## Mass-centered escape selection (2026-11-11)
+
+Escape selection now recomputes the global mass-weighted position and velocity
+from positive-mass real stars on every removal check, in the particles' stored
+coordinate frame. Artificial particles and zero-mass remnants do not contribute.
+The status soft-potential-weighted center is not changed, but is no longer used
+for the escape radius or relative kinetic energy. This prevents signed soft
+potentials and extrapolated status-center velocities from driving mass deletion.
+The Galpy coordinate frame and inertial deletion-energy bookkeeping retain their
+previous definitions; the new escape center must not replace those frame offsets.
+
+When deletion empties a stellar-only system, integration stops at the actual
+removal time before rebuilding the tree. It does not pretend to have reached the
+requested physical end time. Live-DM evolution is outside this empty-system branch.
+
+Regression cases include an unrelated runaway status center, a compact cluster
+translated and boosted relative to the origin, and an empty population; all
+existing binary selection and deletion-energy checks are retained. The boundary
+pair fixture now places its massive core so that the actual mass center is zero.
+
+The N/rh sweep keeps R_escape=100 initial rh by default. To explore sensitivity,
+set ESCAPE_RADIUS_RH=200 or 300; this is a physical/numerical boundary choice,
+not a substitute for the center fix. Larger radii retain escaping stars longer,
+increase force/escape-check work, and change escape reporting times. Compare
+cluster evolution and merger statistics at equal physical times or initial trh.
+
+Validation of this change: the full escape regression passed with 1 MPI rank /
+4 OpenMP threads and 2 MPI ranks / 2 OpenMP threads. The actual server high-density
+N10000 data.37 two-particle snapshot, restarted with exact dt=2^-28, removed both
+remaining particles and exited with status 0 at t=0.0047293379902839661 Myr,
+without attempting an empty Morton tree. Full 300-trh science runs and live-DM /
+Galpy runtime cases have not been rerun.
