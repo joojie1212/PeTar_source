@@ -2,6 +2,7 @@
 
 #include "Common/Float.h"
 #include "Common/list.h"
+#include "Common/inner_parallel.hpp"
 #include "AR/symplectic_integrator.h"
 #include "Hermite/ar_information.h"
 #include "Hermite/hermite_particle.h"
@@ -254,6 +255,29 @@ namespace H4{
         Tinfo info; ///< information of the system
         Profile profile; // profile to measure the status
 
+        //! Snapshots of Neighbor::initial_step_flag / group perturber flag.
+        /*!
+          These flags are written by the owner of the object and read by every
+          particle that has that object as neighbour, so a parallel force loop
+          must not read the live values.  calcAccJerkNBList builds the snapshots
+          before the loop and installs them here; the update helpers then take
+          the flag from the snapshot.  When the pointers are NULL (any other
+          caller) the live values are used.
+        */
+        const unsigned char* nb_flag_in_;
+        const unsigned char* group_flag_in_;
+        std::vector<unsigned char> nb_flag_buf_;
+        std::vector<unsigned char> group_flag_buf_;
+
+        //! initial step flag of particle _j, from the snapshot when installed
+        bool neighborInitialStepFlag(const int _j) const {
+            return nb_flag_in_ ? (nb_flag_in_[_j]!=0) : neighbors[_j].initial_step_flag;
+        }
+        //! initial step flag of group _j, from the snapshot when installed
+        bool groupInitialStepFlag(const int _j) const {
+            return group_flag_in_ ? (group_flag_in_[_j]!=0) : groups[_j].perturber.initial_step_flag;
+        }
+
         //! check whether parameters values are correct
         /*! \return true: all correct
          */
@@ -280,7 +304,8 @@ namespace H4{
                              index_group_resolve_(), index_group_cm_(), 
                              pred_(), force_(), time_next_(), 
                              index_group_mask_(), table_group_mask_(), table_single_mask_(), step(),
-                             manager(NULL), ar_manager(NULL), particles(), groups(), neighbors(), perturber(), info(), profile() {}
+                             manager(NULL), ar_manager(NULL), particles(), groups(), neighbors(), perturber(), info(), profile(),
+                             nb_flag_in_(NULL), group_flag_in_(NULL), nb_flag_buf_(), group_flag_buf_() {}
 
         //! clear function
         void clear() {
@@ -727,7 +752,7 @@ namespace H4{
                 if (pj.mass==0) continue;
                 Float r2 = manager->interaction.calcAccJerkPairSingleSingle(_fi, _pi, pj);
                 ASSERT(r2>0.0);
-                _nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j);
+                _nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j, neighborInitialStepFlag(j));
             }
 
             auto* group_ptr = groups.getDataAddress();
@@ -741,7 +766,7 @@ namespace H4{
                 if (groupj.particles.cm.mass==0) continue;
                 Float r2 = manager->interaction.calcAccJerkPairSingleGroupMember(_fi, _pi, groupj);
                 ASSERT(r2>0.0);
-                _nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+                _nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
             }
 
             // cm group list
@@ -757,7 +782,7 @@ namespace H4{
                 ASSERT(_pi.id!=pj.id);
                 Float r2 = manager->interaction.calcAccJerkPairSingleGroupCM(_fi, _pi, groupj, pj);
                 ASSERT(r2>0.0);
-                _nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+                _nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
             }
             ASSERT(_nbi.n_neighbor_group + _nbi.n_neighbor_single == _nbi.neighbor_address.getSize());
 
@@ -794,7 +819,7 @@ namespace H4{
                 if (pj.mass==0.0) continue;
                 Float r2 = manager->interaction.calcAccJerkPairGroupCMSingle(_fi, _groupi, _pi, pj);
                 ASSERT(r2>0.0);
-                nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j);
+                nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j, neighborInitialStepFlag(j));
             }
 
             auto* group_ptr = groups.getDataAddress();
@@ -808,7 +833,7 @@ namespace H4{
                 if (groupj.particles.cm.mass==0.0) continue;
                 Float r2 = manager->interaction.calcAccJerkPairGroupCMGroupMember(_fi, _groupi, _pi, groupj);
                 ASSERT(r2>0.0);
-                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
             }
 
             // cm group list
@@ -823,7 +848,7 @@ namespace H4{
                 ASSERT(j+index_offset_group_<pred_.getSize());
                 Float r2 = manager->interaction.calcAccJerkPairGroupCMGroupCM(_fi, _groupi, _pi, groupj, pj);
                 ASSERT(r2>0.0);
-                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
             }
             ASSERT(nbi.n_neighbor_group + nbi.n_neighbor_single == nbi.neighbor_address.getSize());
 
@@ -859,7 +884,7 @@ namespace H4{
                 ASSERT(_pi.id!=pj.id);
                 Float r2 = manager->interaction.calcR2Pair(_pi, pj);
                 ASSERT(r2>0.0);
-                nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j);
+                nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j, neighborInitialStepFlag(j));
             }
 
             auto* group_ptr = groups.getDataAddress();
@@ -875,7 +900,7 @@ namespace H4{
                 if (pj.mass==0.0) continue;
                 Float r2 = manager->interaction.calcR2Pair(_pi, pj);
                 ASSERT(r2>0.0);
-                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
             }
 
             // cm group list
@@ -890,7 +915,7 @@ namespace H4{
                 ASSERT(j+index_offset_group_<pred_.getSize());
                 Float r2 = manager->interaction.calcR2Pair(_pi, pj);
                 ASSERT(r2>0.0);
-                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
             }
             ASSERT(nbi.n_neighbor_group + nbi.n_neighbor_single == nbi.neighbor_address.getSize());
             
@@ -956,34 +981,59 @@ namespace H4{
                                       const int* _index_group,
                                       const int  _n_group) {
 
-            // predictor 
-            //auto* ptcl = particles.getDataAddress();
             auto* pred_ptr = pred_.getDataAddress();
             auto* force_ptr = force_.getDataAddress();
             auto* neighbor_ptr = neighbors.getDataAddress();
-            for (int k=0; k<_n_single; k++) {
-                const int i = _index_single[k];
-                auto& pi = pred_ptr[i];
-                auto& fi = force_ptr[i];
-                auto& nbi = neighbor_ptr[i];
-                calcOneSingleAccJerkNB(fi, nbi, pi, pi.id);
+            auto* group_ptr = groups.getDataAddress();
+
+            // Snapshot the step-update flags.  An iteration writes only the flag
+            // of the object it owns, but it reads the flags of all its
+            // neighbours, so without the snapshot the propagation of the flag
+            // would depend on the order in which the items run - and the loop
+            // below could not be split into tasks.  With the snapshot the flag
+            // propagates one neighbour hop per synchronization step, driven by
+            // the state at the beginning of the force calculation.
+            const int n_single_flag = neighbors.getSize();
+            nb_flag_buf_.resize(n_single_flag);
+            for (int i=0; i<n_single_flag; i++)
+                nb_flag_buf_[i] = neighbors[i].initial_step_flag ? 1 : 0;
+            const int n_group_flag = groups.getSize();
+            group_flag_buf_.resize(n_group_flag);
+            for (int i=0; i<n_group_flag; i++)
+                group_flag_buf_[i] = groups[i].perturber.initial_step_flag ? 1 : 0;
+            nb_flag_in_    = nb_flag_buf_.data();
+            group_flag_in_ = group_flag_buf_.data();
+
+            const int n_tot = _n_single + _n_group;
+            auto calcOneItem = [&](const int k) {
+                if (k<_n_single) {
+                    const int i = _index_single[k];
+                    calcOneSingleAccJerkNB(force_ptr[i], neighbor_ptr[i], pred_ptr[i], pred_ptr[i].id);
+                }
+                else {
+                    const int i = _index_group[k-_n_single];
+                    auto& groupi = group_ptr[i];
+                    // use predictor of cm
+                    auto& pi = pred_ptr[i+index_offset_group_];
+                    auto& fi = force_ptr[i+index_offset_group_];
+                    if (groupi.particles.cm.mass>0) {
+                        if (groupi.perturber.need_resolve_flag) calcOneGroupMemberAccJerkNB(fi, groupi, pi);
+                        else calcOneGroupCMAccJerkNB(fi, groupi, pi);
+                    }
+                    else calcOneSingleAccJerkNB(fi, groupi.perturber, pi, pi.id);
+                }
+            };
+
+            if (InnerPar::useTask(n_tot, 16)) {
+#pragma omp taskloop num_tasks(InnerPar::taskCount(n_tot))
+                for (int k=0; k<n_tot; k++) calcOneItem(k);
+            }
+            else {
+                for (int k=0; k<n_tot; k++) calcOneItem(k);
             }
 
-            // for group active particles
-            auto* group_ptr = groups.getDataAddress();
-            
-            for (int k=0; k<_n_group; k++) {
-                const int i = _index_group[k];
-                auto& groupi = group_ptr[i];
-                // use predictor of cm
-                auto& pi = pred_ptr[i+index_offset_group_];
-                auto& fi = force_ptr[i+index_offset_group_];
-                if (groupi.particles.cm.mass>0) {
-                    if (groupi.perturber.need_resolve_flag) calcOneGroupMemberAccJerkNB(fi, groupi, pi);
-                    else calcOneGroupCMAccJerkNB(fi, groupi, pi);
-                }
-                else calcOneSingleAccJerkNB(fi, groupi.perturber, pi, pi.id);
-            }
+            nb_flag_in_    = NULL;
+            group_flag_in_ = NULL;
         }
 
         //! reduce one group cm step by half and sort index dt group 
@@ -2352,7 +2402,43 @@ namespace H4{
             std::vector<int> interrupt_index_dt_group_list(n_group_tot);
             int n_interrupt_change_dt=0;
 
-            for (int i=i_start; i<n_group_tot; i++) {
+            // Integrate the groups of this synchronization step.
+            //
+            // The loop runs in two phases:
+            //   compute - integrates one group and keeps everything that has to
+            //             be published in that group's own result slot; an
+            //             iteration therefore writes only the group it owns and
+            //             the iterations are independent of each other;
+            //   commit  - publishes the results in ascending index order.
+            //
+            // Keeping the phases apart is what makes the loop parallelisable:
+            // the neighbour tables store addresses of the group data
+            // (Neighbor holds &group.particles), so a mass or step change made
+            // in the middle of the loop is visible to whichever groups are
+            // integrated afterwards, i.e. the outcome used to depend on the
+            // order in which the dt-sorted list was walked.  Publishing at the
+            // end makes the outcome of a step independent of that order, and
+            // the serial and the task-parallel path agree bit for bit.  The
+            // price is that a mass change caused by an interrupt in this loop
+            // takes effect at the next synchronization step instead of
+            // immediately for the groups that happen to come later.
+            struct GroupStepResult {
+                AR::InterruptBinary<Tparticle> interrupt;
+                Float dm;            // cm mass change to publish
+                Float de_pot;        // energy corrections, published in commit order
+                Float de_kin;
+                Float cm_time_next;  // new cm time_next, valid when change_dt
+                int   n_step;
+                int   n_step_tsyn;
+                bool  change_dt;
+                bool  initial_step_flag;
+                GroupStepResult()
+                    : interrupt(), dm(0.0), de_pot(0.0), de_kin(0.0), cm_time_next(0.0),
+                      n_step(0), n_step_tsyn(0), change_dt(false), initial_step_flag(false) {}
+            };
+
+            //! phase 1: integrate groups[i] and record what has to be published
+            auto integrateOneGroup = [&](const int i, GroupStepResult& _res) {
                 const int k = index_dt_sorted_group_[i];
 
 #ifdef HERMITE_DEBUG            
@@ -2364,80 +2450,131 @@ namespace H4{
                 groups[k].info.calcDsAndStepOption(ar_manager->step.getOrder(), ar_manager->interaction.gravitational_constant, ar_manager->ds_scale);
 
                 // group integration 
-                interrupt_binary_ = groups[k].integrateToTime(time_next);
+                _res.interrupt = groups[k].integrateToTime(time_next);
 
                 // profile
-                profile.ar_step_count += groups[k].profile.step_count;
-                profile.ar_step_count_tsyn += groups[k].profile.step_count_tsyn;
+                _res.n_step      = groups[k].profile.step_count;
+                _res.n_step_tsyn = groups[k].profile.step_count_tsyn;
 
-                // record interrupt group and quit
-                if (interrupt_binary_.status!=AR::InterruptStatus::none) {
-                    // particle cm is the old cm in original frame
-                    auto& pcm = groups[k].particles.cm;
+                if (_res.interrupt.status==AR::InterruptStatus::none) return;
 
-                    if (interrupt_binary_.status==AR::InterruptStatus::merge||interrupt_binary_.status==AR::InterruptStatus::destroy) {
-                        index_group_merger_.addMember(k);
-                    }
-                    else {
-                        // set initial step flag 
-                        groups[k].perturber.initial_step_flag=true;
+                // particle cm is the old cm in original frame
+                auto& pcm = groups[k].particles.cm;
+                ASSERT(!groups[k].particles.isOriginFrame());
 
-                        if (pcm.time + pcm.dt >time_next) {
-                            ASSERT(i>=n_act_group_);
-                            // set cm step to reach time_next
-                            pcm.dt = time_next - pcm.time;
-                            time_next_[k+index_offset_group_] = time_next;
-                            // recored index in index_dt_sort of the interrupt case for moving later
-                            interrupt_index_dt_group_list[n_interrupt_change_dt++] = i;
-                        }
-                    }
-                    
-                    // correct cm potential energy 
-                    //Float dm = correctMassChangePotEnergyBinaryIter(*interrupt_binary_.adr);
-                    // notice the bin_root represent new c.m. in rest frame
-                    auto& bink = groups[k].info.getBinaryTreeRoot();
-                    Float dm = bink.mass - pcm.mass;
-                    Float de_pot = force_[k+index_offset_group_].pot*dm;
-                    energy_.de_cum += de_pot;
-                    energy_.de_binary_interrupt += de_pot;
-                    energy_sd_.de_cum += de_pot;
-                    energy_sd_.de_binary_interrupt += de_pot;
+                if (_res.interrupt.status!=AR::InterruptStatus::merge
+                    &&_res.interrupt.status!=AR::InterruptStatus::destroy) {
+                    _res.initial_step_flag = true;
 
-                    // correct kinetic energy of cm
-                    ASSERT(!groups[k].particles.isOriginFrame());
-                   // first remove mass loss kinetic energy assuming original cm velocity
-                    auto& vcm = pcm.vel;
-                    auto& vbin = bink.vel;
-                    auto& vbin_bk = groups[k].info.vcm_record;
-                    //Float vbcm[3] = {vcm[0] + vbin_bk[0], vcm[1] + vbin_bk[1], vcm[2] + vbin_bk[2]};
-                    Float de_kin = 0.5*dm*(vcm[0]*vcm[0]+vcm[1]*vcm[1]+vcm[2]*vcm[2]);
-                    // then correct c.m. motion if the c.m. velocity is shifted, 
-                    // this can be by adding m_cm(new) * v_cm(new;rest) \dot v_cm(old;origin)
-                    Float dvbin[3] = {vbin[0] - vbin_bk[0], vbin[1] - vbin_bk[1], vbin[2] - vbin_bk[2]};
-                    de_kin += bink.mass*(dvbin[0]*vcm[0]+dvbin[1]*vcm[1]+dvbin[2]*vcm[2]);
-                    energy_.de_cum += de_kin;
-                    energy_.de_binary_interrupt += de_kin;
-                    energy_sd_.de_cum += de_kin;
-                    energy_sd_.de_binary_interrupt += de_kin;
-
-                    // back up vcm for later on perturbation kinetic energy correction
-                    vbin_bk[0] = vbin[0];
-                    vbin_bk[1] = vbin[1];
-                    vbin_bk[2] = vbin[2];
-
-
-                    // update particle dm, velocity should not change to be consistent with frame
-                    pcm.mass += dm;
-                    //particles.cm.mass += dm;
-
-                    if (ar_manager->interrupt_detection_option==2) { // quit integration
-                        interrupt_group_dt_sorted_group_index_ = i;
-                        ASSERT(time_next - interrupt_binary_.time_now + ar_manager->time_error_max >= 0.0);
-                        return interrupt_binary_;
+                    if (pcm.time + pcm.dt >time_next) {
+                        ASSERT(i>=n_act_group_);
+                        // set cm step to reach time_next (applied in commit)
+                        _res.change_dt    = true;
+                        _res.cm_time_next = time_next;
                     }
                 }
 
-                ASSERT(abs(groups[k].getTime()-time_next)<=ar_manager->time_error_max);
+                // correct cm potential energy 
+                //Float dm = correctMassChangePotEnergyBinaryIter(*interrupt_binary_.adr);
+                // notice the bin_root represent new c.m. in rest frame
+                auto& bink = groups[k].info.getBinaryTreeRoot();
+                _res.dm     = bink.mass - pcm.mass;
+                _res.de_pot = force_[k+index_offset_group_].pot*_res.dm;
+
+                // correct kinetic energy of cm
+                // first remove mass loss kinetic energy assuming original cm velocity
+                auto& vcm     = pcm.vel;
+                auto& vbin    = bink.vel;
+                auto& vbin_bk = groups[k].info.vcm_record;
+                Float de_kin = 0.5*_res.dm*(vcm[0]*vcm[0]+vcm[1]*vcm[1]+vcm[2]*vcm[2]);
+                // then correct c.m. motion if the c.m. velocity is shifted, 
+                // this can be by adding m_cm(new) * v_cm(new;rest) \dot v_cm(old;origin)
+                Float dvbin[3] = {vbin[0] - vbin_bk[0], vbin[1] - vbin_bk[1], vbin[2] - vbin_bk[2]};
+                de_kin += bink.mass*(dvbin[0]*vcm[0]+dvbin[1]*vcm[1]+dvbin[2]*vcm[2]);
+                _res.de_kin = de_kin;
+            };
+
+            //! phase 2: publish groups[i]; returns true when the integration must stop
+            auto commitOneGroup = [&](const int i, const GroupStepResult& _res) -> bool {
+                const int k = index_dt_sorted_group_[i];
+
+                profile.ar_step_count      += _res.n_step;
+                profile.ar_step_count_tsyn += _res.n_step_tsyn;
+                // the sequential loop left the last group's interrupt in this member
+                interrupt_binary_ = _res.interrupt;
+
+                if (_res.interrupt.status==AR::InterruptStatus::none) {
+                    ASSERT(abs(groups[k].getTime()-time_next)<=ar_manager->time_error_max);
+                    return false;
+                }
+
+                auto& pcm = groups[k].particles.cm;
+
+                if (_res.interrupt.status==AR::InterruptStatus::merge
+                    ||_res.interrupt.status==AR::InterruptStatus::destroy) {
+                    index_group_merger_.addMember(k);
+                }
+                else if (_res.initial_step_flag) {
+                    // set initial step flag 
+                    groups[k].perturber.initial_step_flag=true;
+                    if (_res.change_dt) {
+                        // set cm step to reach time_next
+                        pcm.dt = _res.cm_time_next - pcm.time;
+                        time_next_[k+index_offset_group_] = _res.cm_time_next;
+                        // recored index in index_dt_sort of the interrupt case for moving later
+                        interrupt_index_dt_group_list[n_interrupt_change_dt++] = i;
+                    }
+                }
+
+                // correct cm potential energy, then kinetic energy (same order as
+                // the sequential version, so the ledger is identical)
+                energy_.de_cum += _res.de_pot;
+                energy_.de_binary_interrupt += _res.de_pot;
+                energy_sd_.de_cum += _res.de_pot;
+                energy_sd_.de_binary_interrupt += _res.de_pot;
+                energy_.de_cum += _res.de_kin;
+                energy_.de_binary_interrupt += _res.de_kin;
+                energy_sd_.de_cum += _res.de_kin;
+                energy_sd_.de_binary_interrupt += _res.de_kin;
+
+                // back up vcm for later on perturbation kinetic energy correction
+                auto& vbin    = groups[k].info.getBinaryTreeRoot().vel;
+                auto& vbin_bk = groups[k].info.vcm_record;
+                vbin_bk[0] = vbin[0];
+                vbin_bk[1] = vbin[1];
+                vbin_bk[2] = vbin[2];
+
+                // update particle dm, velocity should not change to be consistent with frame
+                pcm.mass += _res.dm;
+                return false;
+            };
+
+            // NOTE: the two phases are also what an intra-cluster task parallel
+            // version needs.  It cannot be switched on yet: the AR force kernel
+            // reads the *member* arrays of group perturbers
+            // (ar_interaction.hpp, ptclgroup[...]->getDataAddress()), so two
+            // groups that are neighbours in the same cluster still see each
+            // other's partially integrated members.  Making that loop parallel
+            // requires freezing the perturber members per group first.
+            const int n_group_work = n_group_tot - i_start;
+            if (ar_manager->interrupt_detection_option==2) {
+                // "quit at the first interrupt" is a sequential contract: the
+                // remaining groups must stay untouched until the next call.
+                GroupStepResult res;
+                for (int i=i_start; i<n_group_tot; i++) {
+                    integrateOneGroup(i, res);
+                    commitOneGroup(i, res);
+                    if (res.interrupt.status!=AR::InterruptStatus::none) { // quit integration
+                        interrupt_group_dt_sorted_group_index_ = i;
+                        ASSERT(time_next - res.interrupt.time_now + ar_manager->time_error_max >= 0.0);
+                        return interrupt_binary_;
+                    }
+                }
+            }
+            else {
+                std::vector<GroupStepResult> results(n_group_work);
+                for (int ii=0; ii<n_group_work; ii++) integrateOneGroup(i_start+ii, results[ii]);
+                for (int ii=0; ii<n_group_work; ii++) commitOneGroup(i_start+ii, results[ii]);
             }
 
             // update index_dt_sorted_group_ due to the change of dt
