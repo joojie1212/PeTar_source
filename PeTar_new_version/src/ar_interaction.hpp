@@ -9,6 +9,7 @@
 #include "hard_ptcl.hpp"
 #include "Hermite/hermite_particle.h"
 #include "ar_perturber.hpp"
+#include "ar_simd.hpp"
 #include "two_body_tide.hpp"
 #include "peters_merger_time.hpp"
 #include "merger_partition.hpp"
@@ -606,6 +607,73 @@ public:
 
             Float acc_pert_cm[3]={0.0, 0.0, 0.0};
             Float mcm = 0.0;
+#ifdef PETAR_AR_SIMD4
+            // Four targets per vector block.  The sources are walked in the
+            // same order as the scalar code (singles ascending, then groups
+            // ascending with their members ascending) and each lane keeps one
+            // accumulator, so the summation order is unchanged.
+            Float s_rin[n_pert_single+1],  s_rout[n_pert_single+1];
+            Float s_norm[n_pert_single+1], s_coff[n_pert_single+1];
+            for (int j=0; j<n_pert_single; j++) {
+                s_rin[j]  = changeover[j]->getRin();
+                s_rout[j] = changeover[j]->getRout();
+                s_norm[j] = changeover[j]->getNorm();
+                s_coff[j] = changeover[j]->getCoff();
+            }
+            // (xp[j]-xcm) is a per-group constant; keep the same association as
+            // the scalar expression so the rounding is unchanged.
+            Float gdx[n_pert_group+1][3];
+            int   gcount[n_pert_group+1];
+            const PtclHard* member_base[n_pert_group+1];
+            for (int jk=0; jk<n_pert_group; jk++) {
+                const int j = n_pert_single + jk;
+                for (int d=0; d<3; d++) gdx[jk][d] = xp[j][d] - xcm[d];
+                gcount[jk] = ptclgroup[jk]->getSize();
+                member_base[jk] = ptclgroup[jk]->getDataAddress();
+            }
+
+            for (int i0=0; i0<_n_particle; i0+=ARSimd::BLOCK) {
+                const int nb = std::min(ARSimd::BLOCK, _n_particle-i0);
+                Float xib[3][ARSimd::BLOCK], pipos[3][ARSimd::BLOCK];
+                Float rin_l[ARSimd::BLOCK], rout_l[ARSimd::BLOCK];
+                Float norm_l[ARSimd::BLOCK], coff_l[ARSimd::BLOCK];
+                for (int l=0; l<ARSimd::BLOCK; l++) {
+                    const int i = i0 + std::min(l, nb-1); // padding lanes copy the last target
+                    const auto& pi = _particles[i];
+                    for (int d=0; d<3; d++) {
+                        pipos[d][l] = pi.pos[d];
+                        xib[d][l]   = pi.pos[d] + xcm[d];
+                    }
+                    rin_l[l]  = pi.changeover.getRin();
+                    rout_l[l] = pi.changeover.getRout();
+                    norm_l[l] = pi.changeover.getNorm();
+                    coff_l[l] = pi.changeover.getCoff();
+                }
+                Float acc_b[3][ARSimd::BLOCK];
+                ARSimd::singles4(xp, m, s_rin, s_rout, s_norm, s_coff, n_pert_single,
+                                 xib, rin_l, rout_l, norm_l, coff_l,
+                                 eps_sq, gravitational_constant, acc_b);
+                if (n_pert_group>0)
+                    ARSimd::groupMembers4(gdx, gcount, member_base,
+                                          group_positions.data(), group_offset.data(),
+                                          n_pert_group, pipos,
+                                          rin_l, rout_l, norm_l, coff_l,
+                                          eps_sq, gravitational_constant, acc_b);
+                for (int l=0; l<nb; l++) {
+                    const int i = i0+l;
+                    const auto& pi = _particles[i];
+                    Float* acc_pert = _force[i].acc_pert;
+                    acc_pert[0] = acc_b[0][l];
+                    acc_pert[1] = acc_b[1][l];
+                    acc_pert[2] = acc_b[2][l];
+                    _force[i].pot_pert = 0.0;
+                    acc_pert_cm[0] += pi.mass * acc_pert[0];
+                    acc_pert_cm[1] += pi.mass * acc_pert[1];
+                    acc_pert_cm[2] += pi.mass * acc_pert[2];
+                    mcm += pi.mass;
+                }
+            }
+#else
             // if (_perturber.need_resolve_flag) {
             // calculate component perturbation
             for (int i=0; i<_n_particle; i++) {
@@ -663,6 +731,7 @@ public:
                 mcm += pi.mass;
 
             }
+#endif
 //#ifdef AR_DEBUG
 //            ASSERT(abs(mcm-_particle_cm.mass)<1e-10);
 //#endif
