@@ -1043,7 +1043,22 @@ public:
             _p.time_record += dt-dt_miss;
 
             // estimate next time to check
-            _p.time_interrupt = std::min(_p.time_record + bse_manager.getTimeStepStar(_p.star), time_interrupt_max);
+            // getTimeStepStar() is only needed for its return value, and for a
+            // compact object trdot() takes its final else branch:
+            //   dt = MAX(0.1, age*10); dt = MIN(dt, 5.0e+02); dtr = dt
+            // so min(dtr,dtm)/tscale is the closed form below.  Evaluating it
+            // directly removes a trdot -> star -> hrdiag call per particle per
+            // step without changing any stored quantity.
+            if (_p.star.kw==13 || _p.star.kw==14) {
+                const double age = _p.star.tphys - _p.star.epoch;
+                double st = std::max(0.1, age*10.0);
+                if (st > 5.0e2) st = 5.0e2;
+                st /= bse_manager.tscale;
+                _p.time_interrupt = std::min(_p.time_record + st, time_interrupt_max);
+            }
+            else {
+                _p.time_interrupt = std::min(_p.time_record + bse_manager.getTimeStepStar(_p.star), time_interrupt_max);
+            }
 
             // record mass change (if loss, negative)
             double dm = bse_manager.getMassLoss(output);
