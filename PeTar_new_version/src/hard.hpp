@@ -2368,33 +2368,25 @@ public:
     void driveForOneClusterOMP(const PS::F64 _dt) {
         const PS::S32 n = ptcl_hard_.size();
 
-        Float de_kin_total = 0.0;
-#pragma omp parallel for reduction(+:de_kin_total)
+        // Two-phase drift of the isolated particles of one cluster.
+        //
+        // Phase 1 (parallel) free-streams every particle with the velocity it
+        // has at the beginning of the step.  Phase 2 refreshes the search
+        // radius, and - when stellar evolution is on - evolves the star first,
+        // because the radius follows the new mass.
+        //
+        // Stellar evolution has to stay out of the parallel loop: the Fortran
+        // BSE state lives in COMMON blocks shared by all threads, and the four
+        // energy accumulators below were written by every thread without
+        // synchronisation.  Running phase 2 in index order reproduces the
+        // single-thread call order exactly.  When stellar evolution is switched
+        // off at run time nothing can change mass or velocity, so the fused
+        // parallel form is kept.
+#pragma omp parallel for
         for(PS::S32 i=0; i<n; i++){
             auto& pi = ptcl_hard_[i];
             PS::F64vec dr = pi.vel * _dt;
             pi.pos += dr;
-
-#ifdef STELLAR_EVOLUTION
-            PS::F64 mbk = pi.mass;
-
-            PS::F64vec vbk = pi.vel; //back up velocity in case of change
-            assert(!std::isinf(vbk.x));
-            assert(!std::isnan(vbk.x));
-            int modify_flag = manager->ar_manager.interaction.modifyOneParticle(pi, time_origin_, time_origin_ + _dt);
-            if (modify_flag) {
-                auto& v = pi.vel;
-                Float de_kin = 0.5*(pi.mass*(v[0]*v[0]+v[1]*v[1]+v[2]*v[2]) - mbk*(vbk[0]*vbk[0]+vbk[1]*vbk[1]+vbk[2]*vbk[2]));
-                de_kin_total += de_kin;
-            }
-            // shift time interrupt in order to get consistent time for stellar evolution in the next drift
-            //pi.time_record    -= _dt;
-            //pi.time_interrupt -= _dt;
-#endif
-
-            //// to avoid issue in cluster search with velocity
-            //auto& pi_cm = pi.group_data.cm;
-            //pi_cm.mass = pi_cm.vel.x = pi_cm.vel.y = pi_cm.vel.z = 0.0;
 
 #ifdef HARD_DEBUG
             // to avoid issue in cluster search with velocity
@@ -2406,23 +2398,53 @@ public:
                 assert(pcm.vel.z==0.0);
             }
 #endif
-            assert(!std::isinf(pi.vel.x));
-            assert(!std::isnan(pi.vel.x));
-            pi.Ptcl::calcRSearch(_dt);
-            /*
-              DriveKeplerRestricted(mass_sun_, 
-              pos_sun_, pi.pos, 
-              vel_sun_, pi.vel, dt); 
-            */
         }
 
+#ifdef STELLAR_EVOLUTION
+        Float de_kin_total = 0.0;
+        if (manager->ar_manager.interaction.stellar_evolution_option==0) {
+#pragma omp parallel for
+            for(PS::S32 i=0; i<n; i++){
+                auto& pi = ptcl_hard_[i];
+                assert(!std::isinf(pi.vel.x));
+                assert(!std::isnan(pi.vel.x));
+                pi.Ptcl::calcRSearch(_dt);
+            }
+        }
+        else {
+            for(PS::S32 i=0; i<n; i++){
+                auto& pi = ptcl_hard_[i];
+                const PS::F64 mbk = pi.mass;
+                const PS::F64vec vbk = pi.vel; //back up velocity in case of change
+                assert(!std::isinf(vbk.x));
+                assert(!std::isnan(vbk.x));
+                const int modify_flag = manager->ar_manager.interaction.modifyOneParticle(pi, time_origin_, time_origin_ + _dt);
+                if (modify_flag) {
+                    const auto& v = pi.vel;
+                    de_kin_total += 0.5*(pi.mass*(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])
+                                        -mbk*(vbk[0]*vbk[0]+vbk[1]*vbk[1]+vbk[2]*vbk[2]));
+                }
+                assert(!std::isinf(pi.vel.x));
+                assert(!std::isnan(pi.vel.x));
+                pi.Ptcl::calcRSearch(_dt);
+            }
+        }
         energy.de_sd_change_cum += de_kin_total;
         energy.de_sd_change_modify_single += de_kin_total;
         energy.de_change_cum += de_kin_total;
         energy.de_change_modify_single += de_kin_total;
+#else
+#pragma omp parallel for
+        for(PS::S32 i=0; i<n; i++){
+            auto& pi = ptcl_hard_[i];
+            assert(!std::isinf(pi.vel.x));
+            assert(!std::isnan(pi.vel.x));
+            pi.Ptcl::calcRSearch(_dt);
+        }
+#endif
+
         time_origin_ += _dt;
     }
-
     //! write back hard particles to global system, check mass modification and update time of write back
     /*! 
       @param[in,out] _sys: particle system
