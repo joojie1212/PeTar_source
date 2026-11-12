@@ -98,6 +98,17 @@ public:
         return r_in_;
     }
 
+    //! get cached 1/(r_out-r_in)
+    const Float &getNorm() const {
+        return norm_;
+    }
+
+    //! get cached (r_out-r_in)/(r_out+r_in)
+    const Float &getCoff() const {
+        return coff_;
+    }
+
+
     //! get r_out
     /*! \return r_out
      */
