@@ -1024,7 +1024,7 @@ namespace H4{
                 }
             };
 
-            if (InnerPar::useTask(n_tot, 16)) {
+            if (InnerPar::useTask(n_tot, 1)) {
 #pragma omp taskloop num_tasks(InnerPar::taskCount(n_tot))
                 for (int k=0; k<n_tot; k++) calcOneItem(k);
             }
@@ -2572,9 +2572,19 @@ namespace H4{
                 }
             }
             else {
-                std::vector<GroupStepResult> results(n_group_work);
-                for (int ii=0; ii<n_group_work; ii++) integrateOneGroup(i_start+ii, results[ii]);
-                for (int ii=0; ii<n_group_work; ii++) commitOneGroup(i_start+ii, results[ii]);
+                // The group loop is entered thousands of times per step and
+                // most of the time it holds one group or none, so the result
+                // buffer is only allocated when there is more than one group.
+                if (n_group_work==1) {
+                    GroupStepResult res;
+                    integrateOneGroup(i_start, res);
+                    commitOneGroup(i_start, res);
+                }
+                else if (n_group_work>1) {
+                    std::vector<GroupStepResult> results(n_group_work);
+                    for (int ii=0; ii<n_group_work; ii++) integrateOneGroup(i_start+ii, results[ii]);
+                    for (int ii=0; ii<n_group_work; ii++) commitOneGroup(i_start+ii, results[ii]);
+                }
             }
 
             // update index_dt_sorted_group_ due to the change of dt

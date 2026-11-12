@@ -3642,7 +3642,13 @@ public:
             correctForceWithCutoffArtificialOneClusterImp(_sys, ptcl_hard_.getPointer(), adr_real_start, adr_real_end, n_group, adr_first_ptcl_arti, _acorr_flag);
 
             // obtain correction for real particles in clusters
-            for (int j=adr_real_start; j<adr_real_end; j++) {
+            // P9-2: the j loop is O(N^2) per cluster and used to run on one
+            // thread even when the cluster held hundreds of particles.  Each
+            // j writes only _sys[adr] for its own adr, every k is read, and
+            // the summation order inside one j is untouched, so the result is
+            // independent of the task schedule.
+            const int n_j = adr_real_end - adr_real_start;
+            auto correctOneReal = [&](const int j) {
                 PS::S64 adr = ptcl_local[j].adr_org;
 #ifdef HARD_DEBUG
                 assert(_sys[adr].id==ptcl_local[j].id);
@@ -3691,6 +3697,13 @@ public:
 //                // correct soft potential energy of one particle change due to mass change
 //                correctSoftPotMassChangeOneParticle(_sys[adr]);
 //#endif
+            };
+            if (InnerPar::useTask(n_j, 4)) {
+#pragma omp taskloop num_tasks(InnerPar::taskCount(n_j))
+                for (int jj=0; jj<n_j; jj++) correctOneReal(adr_real_start+jj);
+            }
+            else {
+                for (int jj=0; jj<n_j; jj++) correctOneReal(adr_real_start+jj);
             }
         }
     }
