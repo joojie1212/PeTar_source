@@ -474,6 +474,23 @@ namespace ParticleSimulator{
                 offset_src = 0;
                 offset_dst = n0;
             }
+#ifdef HARD_PARALLEL
+            // Merge disjoint ranges in one parallel region per level.
+#ifdef PARTICLE_SIMULATOR_THREAD_PARALLEL
+#pragma omp parallel for schedule(dynamic,1)
+#endif
+            for(int i=0; i<n_sort; i++){
+                std::merge(src->getPointer(head[i*2+0]+offset_src), src->getPointer(end[i*2+0]+offset_src),
+                           src->getPointer(head[i*2+1]+offset_src), src->getPointer(end[i*2+1]+offset_src),
+                           dst->getPointer(head[i*2+0]+offset_dst), pred);
+            }
+            // bookkeeping must stay serial: head[i] = head[2i] aliases head[2j+1] read
+            // by another index j (e.g. i=0 reads head[1] written by i=1).
+            for(int i=0; i<n_sort; i++){
+                head[i] = head[i*2+0];
+                end[i]  = end[i*2+1];
+            }
+#else
             for(int i=0; i<n_sort; i++){
                 MergeSortOmpImpl(src->getPointer(head[i*2+0]+offset_src), src->getPointer(end[i*2+0]+offset_src),
                                  src->getPointer(head[i*2+1]+offset_src), src->getPointer(end[i*2+1]+offset_src),
@@ -481,6 +498,7 @@ namespace ParticleSimulator{
                 head[i] = head[i*2+0];
                 end[i]  = end[i*2+1];
             }
+#endif // HARD_PARALLEL
             if(amari){
                 head[n_sort] = head[n_sort*2];
                 end[n_sort]  = end[n_sort*2];

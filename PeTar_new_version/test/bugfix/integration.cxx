@@ -3,6 +3,7 @@
 #include <sstream>
 #include <unistd.h>
 #include <random>
+#include <set>
 #include "ar_force_reference.hpp"
 
 FPSoft sampleParticle(int id) {
@@ -134,31 +135,42 @@ void testSimdHeapBuffer() {
 }
 
 void testEscaperReduction() {
-    for (int threads: {1,4}) {
+    for (int threads: {1,4}) for(double shift: {0.,4096.}) {
         omp_set_num_threads(threads);
         auto p=std::make_unique<PeTar>();
         p->system_soft.initialize(); p->system_soft.setNumberOfParticleLocal(256);
         p->stat.n_real_loc=256; p->n_interrupt_glb=0;
+        // Status-frame position is deliberately not the current mass center.
         p->stat.pcm.pos=0.; p->stat.pcm.vel=PS::F64vec(3.,0.,0.);
         p->stat.energy.clear(); p->escaper.r_escape_sq=1.; p->escaper.check_energy_flag=false;
         p->input_parameters.write_style.value=0;
         for(int i=0;i<256;++i) {
             p->system_soft[i]=sampleParticle(i+1);
-            p->system_soft[i].pos.x=2.+i;
+            p->system_soft[i].pos.x=shift+2.+i;
         }
         p->removeParticles();
-        assert(p->stat.n_real_loc==0);
+        // The current mass center is shift+129.5. IDs 128 and 129 are
+        // only 0.5 away and must remain, independently of the global offset.
+        assert(p->stat.n_real_loc==2);
+        assert(p->system_soft.getNumberOfParticleLocal()==2);
+        std::set<PS::S64> survivors;
+        for(int i=0;i<2;++i) survivors.insert(p->system_soft[i].id);
+        assert((survivors==std::set<PS::S64>{128,129}));
 #ifdef RECORD_CM_IN_HEADER
-        double expected=-256.*8.;
+        double expected=-254.*8.;
 #else
-        double expected=-256.*0.5;
+        double expected=-254.*0.5;
 #endif
-        // Removing all particles also removes each pair potential once.
+        // Remove every original pair potential except the surviving pair
+        // (unit masses, separation one), counting each removed pair once.
+        const double G=p->input_parameters.gravitational_constant.value;
         for(int d=1;d<256;++d)
-            expected+=p->input_parameters.gravitational_constant.value*(256-d)/double(d);
+            expected+=G*(256-d)/double(d);
+        expected-=G;
         assert(std::abs(p->stat.energy.etot_ref-expected)<1e-10);
         assert(std::abs(p->stat.energy.etot_sd_ref-expected)<1e-10);
         assert(std::abs(p->stat.energy.de_change_cum-expected)<1e-10);
+        assert(std::abs(p->stat.energy.de_sd_change_cum-expected)<1e-10);
     }
 }
 
@@ -570,6 +582,7 @@ void testHardEnergyWarning() {
     assert(std::isfinite(large.denominator));
 }
 
+#ifndef PETAR_BUGFIX_NO_MAIN
 int main(int argc,char** argv) {
     PeTar::initialFDPS(argc,argv); omp_set_num_threads(4);
     testTreeSourceMassGuard();
@@ -583,3 +596,5 @@ int main(int argc,char** argv) {
     testEscaperReduction(); testBSEUnitsAndMass(); testOutputProtectionAndTitles();
     PeTar::finalizeFDPS(); std::cout<<"integration regressions passed\n";
 }
+
+#endif // PETAR_BUGFIX_NO_MAIN

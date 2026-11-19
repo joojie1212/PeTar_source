@@ -167,6 +167,18 @@ namespace H4 {
         //! check and add neighbor of single
         template <class Tp>
         void checkAndAddNeighborSingle(const Float _r2, Tp& _particle, const Neighbor<Tparticle>& _nbp, const int _index) {
+#ifdef HARD_PARALLEL
+            checkAndAddNeighborSingle(_r2, _particle, _nbp, _index, _nbp.initial_step_flag);
+        }
+        //! check and add neighbor of single, with the neighbour's update flag passed in
+        /*! A parallel force loop cannot read _nbp.initial_step_flag directly: the
+            owner of _nbp may be setting it at the same time.  Such a loop takes
+            a snapshot of the flags before it starts and passes the snapshot
+            value here, which also makes the propagation independent of the
+            order in which the particles are processed. */
+        template <class Tp>
+        void checkAndAddNeighborSingle(const Float _r2, Tp& _particle, const Neighbor<Tparticle>& _nbp, const int _index, const bool _nbp_initial_step_flag) {
+#endif // HARD_PARALLEL
             if (_r2<std::max(r_neighbor_crit_sq,_nbp.r_neighbor_crit_sq)) {
                 neighbor_address.addMember(NBAdr<Tparticle>(&_particle, _index));
                 n_neighbor_single++;
@@ -185,12 +197,28 @@ namespace H4 {
                 mass_min_index = _index;
             }
             // if neighbor step need update, also set update flag for i particle
+#ifdef HARD_PARALLEL
+            if(_nbp_initial_step_flag) initial_step_flag = true;
+#else
             if(_nbp.initial_step_flag) initial_step_flag = true;
+#endif // HARD_PARALLEL
         }
 
         //! check and add neighbor of group
         template <class Tgroup>
         void checkAndAddNeighborGroup(const Float _r2, Tgroup& _group, const int _index) {
+#ifdef HARD_PARALLEL
+            checkAndAddNeighborGroup(_r2, _group, _index, _group.perturber.initial_step_flag);
+        }
+        //! check and add neighbor of group, with the group's update flag passed in
+        /*! A parallel force loop cannot read _group.perturber.initial_step_flag
+            directly: the owner of the group may be setting it at the same time.
+            Such a loop takes a snapshot of the flags before it starts and passes
+            the snapshot value here, which also makes the propagation independent
+            of the order in which the particles are processed. */
+        template <class Tgroup>
+        void checkAndAddNeighborGroup(const Float _r2, Tgroup& _group, const int _index, const bool _group_initial_step_flag) {
+#endif // HARD_PARALLEL
             ASSERT(_r2>0.0);
             if (_r2<std::max(r_neighbor_crit_sq, _group.perturber.r_neighbor_crit_sq)) {
                 neighbor_address.addMember(NBAdr<Tparticle>::fromGroup(_group,_index));
@@ -209,7 +237,11 @@ namespace H4 {
                 mass_min_index = _index;
             }
             // if neighbor step need update, also set update flag for i particle
+#ifdef HARD_PARALLEL
+            if(_group_initial_step_flag) initial_step_flag = true;
+#else
             if(_group.perturber.initial_step_flag) initial_step_flag = true;
+#endif // HARD_PARALLEL
         }
 
         //! check whether members should be resolved for outside

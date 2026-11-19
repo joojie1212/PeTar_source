@@ -2,6 +2,9 @@
 
 #include "Common/Float.h"
 #include "Common/list.h"
+#ifdef HARD_PARALLEL
+#include "Common/inner_parallel.hpp"
+#endif // HARD_PARALLEL
 #include "AR/symplectic_integrator.h"
 #include "Hermite/ar_information.h"
 #include "Hermite/hermite_particle.h"
@@ -254,6 +257,31 @@ namespace H4{
         Tinfo info; ///< information of the system
         Profile profile; // profile to measure the status
 
+#ifdef HARD_PARALLEL
+        //! Snapshots of Neighbor::initial_step_flag / group perturber flag.
+        /*!
+          These flags are written by the owner of the object and read by every
+          particle that has that object as neighbour, so a parallel force loop
+          must not read the live values.  calcAccJerkNBList builds the snapshots
+          before the loop and installs them here; the update helpers then take
+          the flag from the snapshot.  When the pointers are NULL (any other
+          caller) the live values are used.
+        */
+        const unsigned char* nb_flag_in_;
+        const unsigned char* group_flag_in_;
+        std::vector<unsigned char> nb_flag_buf_;
+        std::vector<unsigned char> group_flag_buf_;
+
+        //! initial step flag of particle _j, from the snapshot when installed
+        bool neighborInitialStepFlag(const int _j) const {
+            return nb_flag_in_ ? (nb_flag_in_[_j]!=0) : neighbors[_j].initial_step_flag;
+        }
+        //! initial step flag of group _j, from the snapshot when installed
+        bool groupInitialStepFlag(const int _j) const {
+            return group_flag_in_ ? (group_flag_in_[_j]!=0) : groups[_j].perturber.initial_step_flag;
+        }
+
+#endif // HARD_PARALLEL
         //! check whether parameters values are correct
         /*! \return true: all correct
          */
@@ -280,7 +308,12 @@ namespace H4{
                              index_group_resolve_(), index_group_cm_(), 
                              pred_(), force_(), time_next_(), 
                              index_group_mask_(), table_group_mask_(), table_single_mask_(), step(),
+#ifdef HARD_PARALLEL
+                             manager(NULL), ar_manager(NULL), particles(), groups(), neighbors(), perturber(), info(), profile(),
+                             nb_flag_in_(NULL), group_flag_in_(NULL), nb_flag_buf_(), group_flag_buf_() {}
+#else
                              manager(NULL), ar_manager(NULL), particles(), groups(), neighbors(), perturber(), info(), profile() {}
+#endif // HARD_PARALLEL
 
         //! clear function
         void clear() {
@@ -727,7 +760,11 @@ namespace H4{
                 if (pj.mass==0) continue;
                 Float r2 = manager->interaction.calcAccJerkPairSingleSingle(_fi, _pi, pj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                _nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j, neighborInitialStepFlag(j));
+#else
                 _nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j);
+#endif // HARD_PARALLEL
             }
 
             auto* group_ptr = groups.getDataAddress();
@@ -741,7 +778,11 @@ namespace H4{
                 if (groupj.particles.cm.mass==0) continue;
                 Float r2 = manager->interaction.calcAccJerkPairSingleGroupMember(_fi, _pi, groupj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                _nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
+#else
                 _nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+#endif // HARD_PARALLEL
             }
 
             // cm group list
@@ -757,7 +798,11 @@ namespace H4{
                 ASSERT(_pi.id!=pj.id);
                 Float r2 = manager->interaction.calcAccJerkPairSingleGroupCM(_fi, _pi, groupj, pj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                _nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
+#else
                 _nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+#endif // HARD_PARALLEL
             }
             ASSERT(_nbi.n_neighbor_group + _nbi.n_neighbor_single == _nbi.neighbor_address.getSize());
 
@@ -794,7 +839,11 @@ namespace H4{
                 if (pj.mass==0.0) continue;
                 Float r2 = manager->interaction.calcAccJerkPairGroupCMSingle(_fi, _groupi, _pi, pj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j, neighborInitialStepFlag(j));
+#else
                 nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j);
+#endif // HARD_PARALLEL
             }
 
             auto* group_ptr = groups.getDataAddress();
@@ -808,7 +857,11 @@ namespace H4{
                 if (groupj.particles.cm.mass==0.0) continue;
                 Float r2 = manager->interaction.calcAccJerkPairGroupCMGroupMember(_fi, _groupi, _pi, groupj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
+#else
                 nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+#endif // HARD_PARALLEL
             }
 
             // cm group list
@@ -823,7 +876,11 @@ namespace H4{
                 ASSERT(j+index_offset_group_<pred_.getSize());
                 Float r2 = manager->interaction.calcAccJerkPairGroupCMGroupCM(_fi, _groupi, _pi, groupj, pj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
+#else
                 nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+#endif // HARD_PARALLEL
             }
             ASSERT(nbi.n_neighbor_group + nbi.n_neighbor_single == nbi.neighbor_address.getSize());
 
@@ -859,7 +916,11 @@ namespace H4{
                 ASSERT(_pi.id!=pj.id);
                 Float r2 = manager->interaction.calcR2Pair(_pi, pj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j, neighborInitialStepFlag(j));
+#else
                 nbi.checkAndAddNeighborSingle(r2, particles[j], neighbors[j], j);
+#endif // HARD_PARALLEL
             }
 
             auto* group_ptr = groups.getDataAddress();
@@ -875,7 +936,11 @@ namespace H4{
                 if (pj.mass==0.0) continue;
                 Float r2 = manager->interaction.calcR2Pair(_pi, pj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
+#else
                 nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+#endif // HARD_PARALLEL
             }
 
             // cm group list
@@ -890,7 +955,11 @@ namespace H4{
                 ASSERT(j+index_offset_group_<pred_.getSize());
                 Float r2 = manager->interaction.calcR2Pair(_pi, pj);
                 ASSERT(r2>0.0);
+#ifdef HARD_PARALLEL
+                nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_, groupInitialStepFlag(j));
+#else
                 nbi.checkAndAddNeighborGroup(r2, groupj, j+index_offset_group_);
+#endif // HARD_PARALLEL
             }
             ASSERT(nbi.n_neighbor_group + nbi.n_neighbor_single == nbi.neighbor_address.getSize());
             
@@ -951,6 +1020,67 @@ namespace H4{
           @param[in] _index_group: active particle index for groups
           @param[in] _n_group: number of active groups
         */
+#ifdef HARD_PARALLEL
+        inline void calcAccJerkNBList(const int* _index_single,
+                                      const int  _n_single,
+                                      const int* _index_group,
+                                      const int  _n_group) {
+
+            auto* pred_ptr = pred_.getDataAddress();
+            auto* force_ptr = force_.getDataAddress();
+            auto* neighbor_ptr = neighbors.getDataAddress();
+            auto* group_ptr = groups.getDataAddress();
+
+            // Snapshot the step-update flags.  An iteration writes only the flag
+            // of the object it owns, but it reads the flags of all its
+            // neighbours, so without the snapshot the propagation of the flag
+            // would depend on the order in which the items run - and the loop
+            // below could not be split into tasks.  With the snapshot the flag
+            // propagates one neighbour hop per synchronization step, driven by
+            // the state at the beginning of the force calculation.
+            const int n_single_flag = neighbors.getSize();
+            nb_flag_buf_.resize(n_single_flag);
+            for (int i=0; i<n_single_flag; i++)
+                nb_flag_buf_[i] = neighbors[i].initial_step_flag ? 1 : 0;
+            const int n_group_flag = groups.getSize();
+            group_flag_buf_.resize(n_group_flag);
+            for (int i=0; i<n_group_flag; i++)
+                group_flag_buf_[i] = groups[i].perturber.initial_step_flag ? 1 : 0;
+            nb_flag_in_    = nb_flag_buf_.data();
+            group_flag_in_ = group_flag_buf_.data();
+
+            const int n_tot = _n_single + _n_group;
+            auto calcOneItem = [&](const int k) {
+                if (k<_n_single) {
+                    const int i = _index_single[k];
+                    calcOneSingleAccJerkNB(force_ptr[i], neighbor_ptr[i], pred_ptr[i], pred_ptr[i].id);
+                }
+                else {
+                    const int i = _index_group[k-_n_single];
+                    auto& groupi = group_ptr[i];
+                    // use predictor of cm
+                    auto& pi = pred_ptr[i+index_offset_group_];
+                    auto& fi = force_ptr[i+index_offset_group_];
+                    if (groupi.particles.cm.mass>0) {
+                        if (groupi.perturber.need_resolve_flag) calcOneGroupMemberAccJerkNB(fi, groupi, pi);
+                        else calcOneGroupCMAccJerkNB(fi, groupi, pi);
+                    }
+                    else calcOneSingleAccJerkNB(fi, groupi.perturber, pi, pi.id);
+                }
+            };
+
+            if (InnerPar::useTask(n_tot, 1)) {
+#pragma omp taskloop num_tasks(InnerPar::taskCount(n_tot))
+                for (int k=0; k<n_tot; k++) calcOneItem(k);
+            }
+            else {
+                for (int k=0; k<n_tot; k++) calcOneItem(k);
+            }
+
+            nb_flag_in_    = NULL;
+            group_flag_in_ = NULL;
+        }
+#else
         inline void calcAccJerkNBList(const int* _index_single,
                                       const int  _n_single,
                                       const int* _index_group,
@@ -985,6 +1115,7 @@ namespace H4{
                 else calcOneSingleAccJerkNB(fi, groupi.perturber, pi, pi.id);
             }
         }
+#endif // HARD_PARALLEL
 
         //! reduce one group cm step by half and sort index dt group 
         void reduceGroupCMStepByHalfAndSortDtIndex(const int _index) {

@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#ifdef HARD_PARALLEL
+#include <vector>
+#endif // HARD_PARALLEL
 
 #include"AR/symplectic_integrator.h"
 #include"Hermite/hermite_integrator.h"
@@ -188,6 +191,11 @@ public:
     PtclH4* ptcl_origin;  ///> original particle array
 
     AR::InterruptBinary<PtclHard> interrupt_binary; ///> interrupt binary address
+#ifdef HARD_PARALLEL
+    PS::S32 cluster_index; ///> hard cluster currently assigned to this integrator (-1 when idle);
+                           ///> interrupt_list_ is rebuilt in this order, so the sequence of
+                           ///> interrupted clusters no longer depends on thread completion order
+#endif // HARD_PARALLEL
 
 #ifdef HARD_DEBUG_PRINT
     PS::ReallocatableArray<PS::S32> n_group_sub_init; ///> initial sub group number in each groups 
@@ -326,7 +334,11 @@ public:
 
     //! initializer
     HardIntegrator(): h4_int(), sym_int(), manager(NULL), tidal_tensor(), time_origin(-1.0), ptcl_origin(NULL), 
+#ifdef HARD_PARALLEL
+                      interrupt_binary(), cluster_index(-1),
+#else
                       interrupt_binary(), 
+#endif // HARD_PARALLEL
 #ifdef HARD_DEBUG_PRINT
                       n_group_sub_init(), n_group_sub_tot_init(0),
 #endif
@@ -2361,6 +2373,78 @@ public:
     /*! integrate one isolated particle and calculate new r_search
       @param[in] _dt: tree time step
      */
+#ifdef HARD_PARALLEL
+    void driveForOneClusterOMP(const PS::F64 _dt) {
+        const PS::S32 n = ptcl_hard_.size();
+
+        // Drift in parallel, then evolve stars in index order: BSE COMMON
+        // blocks are shared between threads. Refresh search radii after
+        // evolution so that any velocity kick is included. Without evolution,
+        // the radius refresh can also run in parallel.
+#pragma omp parallel for
+        for(PS::S32 i=0; i<n; i++){
+            auto& pi = ptcl_hard_[i];
+            PS::F64vec dr = pi.vel * _dt;
+            pi.pos += dr;
+
+#ifdef HARD_DEBUG
+            // to avoid issue in cluster search with velocity
+            if (!pi.group_data.artificial.isUnused()) {
+                auto& pcm = pi.group_data.cm;
+                assert(pcm.mass==0.0);
+                assert(pcm.vel.x==0.0);
+                assert(pcm.vel.y==0.0);
+                assert(pcm.vel.z==0.0);
+            }
+#endif
+        }
+
+#ifdef STELLAR_EVOLUTION
+        Float de_kin_total = 0.0;
+        if (manager->ar_manager.interaction.stellar_evolution_option==0) {
+#pragma omp parallel for
+            for(PS::S32 i=0; i<n; i++){
+                auto& pi = ptcl_hard_[i];
+                assert(!std::isinf(pi.vel.x));
+                assert(!std::isnan(pi.vel.x));
+                pi.Ptcl::calcRSearch(_dt);
+            }
+        }
+        else {
+            for(PS::S32 i=0; i<n; i++){
+                auto& pi = ptcl_hard_[i];
+                const PS::F64 mbk = pi.mass;
+                const PS::F64vec vbk = pi.vel; //back up velocity in case of change
+                assert(!std::isinf(vbk.x));
+                assert(!std::isnan(vbk.x));
+                const int modify_flag = manager->ar_manager.interaction.modifyOneParticle(pi, time_origin_, time_origin_ + _dt);
+                if (modify_flag) {
+                    const auto& v = pi.vel;
+                    de_kin_total += 0.5*(pi.mass*(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])
+                                        -mbk*(vbk[0]*vbk[0]+vbk[1]*vbk[1]+vbk[2]*vbk[2]));
+                }
+                assert(!std::isinf(pi.vel.x));
+                assert(!std::isnan(pi.vel.x));
+                pi.Ptcl::calcRSearch(_dt);
+            }
+        }
+        energy.de_sd_change_cum += de_kin_total;
+        energy.de_sd_change_modify_single += de_kin_total;
+        energy.de_change_cum += de_kin_total;
+        energy.de_change_modify_single += de_kin_total;
+#else
+#pragma omp parallel for
+        for(PS::S32 i=0; i<n; i++){
+            auto& pi = ptcl_hard_[i];
+            assert(!std::isinf(pi.vel.x));
+            assert(!std::isnan(pi.vel.x));
+            pi.Ptcl::calcRSearch(_dt);
+        }
+#endif
+
+        time_origin_ += _dt;
+    }
+#else
     void driveForOneClusterOMP(const PS::F64 _dt) {
         const PS::S32 n = ptcl_hard_.size();
 
@@ -2418,6 +2502,7 @@ public:
         energy.de_change_modify_single += de_kin_total;
         time_origin_ += _dt;
     }
+#endif // HARD_PARALLEL
 
     //! write back hard particles to global system, check mass modification and update time of write back
     /*! 
@@ -2622,7 +2707,31 @@ public:
         }
 #endif
 
+#ifdef HARD_PARALLEL
+// Per-cluster accumulators.  The loop body below only ever writes the slot of
+// its own cluster, and the global sums are formed afterwards in cluster order,
+// so neither the diagnostics nor the energy ledger depend on the order in which
+// the threads finish.  (Previously the profile counters and the energy ledger
+// were accumulated inside the parallel loop, which made them - and every later
+// reduction that consumes them - a function of the thread schedule.)
+#ifdef PROFILE
+        std::vector<PS::S64> arc_substep_cluster(n_cluster, 0);
+        std::vector<PS::S64> arc_tsyn_cluster(n_cluster, 0);
+        std::vector<PS::S64> h4_step_cluster(n_cluster, 0);
+        std::vector<PS::S64> arc_n_groups_cluster(n_cluster, 0);
+        std::vector<PS::S64> arc_n_groups_iso_cluster(n_cluster, 0);
+#endif
+#ifdef HARD_COUNT_NO_NEIGHBOR
+        std::vector<PS::S32> neighbor_zero_cluster(n_cluster, 0);
+#endif
+#ifdef HARD_CHECK_ENERGY
+        std::vector<HardEnergy> energy_cluster(n_cluster);
+#endif
+
+#pragma omp parallel for schedule(dynamic,1)
+#else
 #pragma omp parallel for schedule(dynamic)
+#endif // HARD_PARALLEL
         for(PS::S32 i=0; i<n_cluster; i++){
             const PS::S32 ith = PS::Comm::getThreadNum();
 #ifdef OMP_PROFILE
@@ -2641,7 +2750,11 @@ public:
                 PS::S32 ptcl_arti_first_index = adr_first_ptcl_arti_in_cluster_[n_group_in_cluster_offset_[i]];
                 if (ptcl_arti_first_index>=0) ptcl_artificial_ptr = &(_ptcl_soft[ptcl_arti_first_index]);
 #ifdef PROFILE
+#ifdef HARD_PARALLEL
+                else arc_n_groups_iso_cluster[i] = 1;
+#else
                 else ARC_n_groups_iso += 1;
+#endif // HARD_PARALLEL
 #endif
                 n_member_in_group_ptr = &(n_member_in_group_[n_group_in_cluster_offset_[i]]);
             }
@@ -2649,7 +2762,11 @@ public:
             num_cluster[ith] += n_ptcl;
 #endif
 #ifdef PROFILE
+#ifdef HARD_PARALLEL
+            arc_n_groups_cluster[i] = n_group;
+#else
             ARC_n_groups  += n_group;
+#endif // HARD_PARALLEL
 #endif
 
 #ifdef HARD_DUMP
@@ -2663,6 +2780,9 @@ public:
 
             // if interrupt exist, escape initial
             hard_int_thread[ith]->initial(ptcl_hard_.getPointer(adr_head), n_ptcl, ptcl_artificial_ptr, n_group, n_member_in_group_ptr, manager, time_origin_);
+#ifdef HARD_PARALLEL
+            hard_int_thread[ith]->cluster_index = i;
+#endif // HARD_PARALLEL
 
             auto& interrupt_binary = hard_int_thread[ith]->integrateToTime(dt);
 
@@ -2676,19 +2796,33 @@ public:
                 hard_int_thread[ith]->driftClusterCMRecordGroupCMDataAndWriteBack(dt);
 
 #ifdef PROFILE
+#ifdef HARD_PARALLEL
+                arc_substep_cluster[i] = hard_int_thread[ith]->ARC_substep_sum;
+                arc_tsyn_cluster[i]    = hard_int_thread[ith]->ARC_tsyn_step_sum;
+                h4_step_cluster[i]     = hard_int_thread[ith]->H4_step_sum;
+#else
                 ARC_substep_sum    += hard_int_thread[ith]->ARC_substep_sum;
                 ARC_tsyn_step_sum  += hard_int_thread[ith]->ARC_tsyn_step_sum;
                 H4_step_sum        += hard_int_thread[ith]->H4_step_sum;
+#endif // HARD_PARALLEL
 #endif
 #ifdef HARD_COUNT_NO_NEIGHBOR
+#ifdef HARD_PARALLEL
+                neighbor_zero_cluster[i] = hard_int_thread[ith]->n_neighbor_zero;
+#else
                 n_neighbor_zero    += hard_int_thread[ith]->n_neighbor_zero;
+#endif // HARD_PARALLEL
 #endif
 #ifdef HARD_CHECK_ENERGY
+#ifdef HARD_PARALLEL
+                energy_cluster[i] = hard_int_thread[ith]->energy;
+#else
                 // Multiple cluster workers share this accumulator.
 #pragma omp critical(petar_hard_energy_accumulate)
                 {
                     energy += hard_int_thread[ith]->energy;
                 }
+#endif // HARD_PARALLEL
 #endif
                 
                 hard_int_thread[ith]->clear();
@@ -2721,17 +2855,64 @@ public:
 
         }
 
+#ifdef HARD_PARALLEL
+#ifdef PROFILE
+        for (PS::S32 i=0; i<n_cluster; i++) {
+            ARC_substep_sum   += arc_substep_cluster[i];
+            ARC_tsyn_step_sum += arc_tsyn_cluster[i];
+            H4_step_sum       += h4_step_cluster[i];
+            ARC_n_groups      += arc_n_groups_cluster[i];
+            ARC_n_groups_iso  += arc_n_groups_iso_cluster[i];
+        }
+#endif
+#ifdef HARD_COUNT_NO_NEIGHBOR
+        for (PS::S32 i=0; i<n_cluster; i++) n_neighbor_zero += neighbor_zero_cluster[i];
+#endif
+#ifdef HARD_CHECK_ENERGY
+        for (PS::S32 i=0; i<n_cluster; i++) energy += energy_cluster[i];
+#endif
+
+        // Register interrupted hard integrators.
+        // The integrators are handed out by an atomic bump allocator, so the
+        // slots (and therefore the old registration order) follow the order in
+        // which the threads finished.  Rebuild the list in cluster order
+        // instead: the interrupt handlers, the merger bookkeeping and the
+        // energy ledger then see the same sequence at any thread count.
+#else
         // regist interrupted hard integrator
+#endif // HARD_PARALLEL
         assert(interrupt_list_.size()==0);
+#ifdef HARD_PARALLEL
+        {
+            std::vector<std::pair<PS::S32,PS::S32> > interrupt_entries; // (cluster index, slot)
+            const PS::S32 n_hard_int_used = static_cast<PS::S32>(hard_int_front_ptr - hard_int_);
+            for (PS::S32 slot=0; slot<n_hard_int_used; slot++) {
+                HardIntegrator* iptr = &hard_int_[slot];
+                if (!iptr->is_initialized) continue;
+#else
         for (auto iptr = hard_int_; iptr<hard_int_front_ptr; iptr++) 
             if (iptr->is_initialized) {
+#endif // HARD_PARALLEL
                 assert(iptr->interrupt_binary.status!=AR::InterruptStatus::none);
+#ifdef HARD_PARALLEL
+                const PS::S32 ci = iptr->cluster_index;
+                assert(ci>=0 && ci<n_cluster);
+                interrupt_entries.push_back(std::pair<PS::S32,PS::S32>(ci, slot));
+            }
+            std::sort(interrupt_entries.begin(), interrupt_entries.end());
+            for (PS::S32 k=0; k<static_cast<PS::S32>(interrupt_entries.size()); k++) {
+                HardIntegrator* iptr = &hard_int_[interrupt_entries[k].second];
+#endif // HARD_PARALLEL
 #ifdef HARD_INTERRUPT_PRINT
                 iptr->printInterruptBinaryInfo(std::cerr);
 #endif
                 interrupt_list_.push_back(iptr);
             }
+#ifdef HARD_PARALLEL
+        }
+#else
 
+#endif // HARD_PARALLEL
 
         // advance time_origin if all clusters finished
         PS::S32 n_interrupt = interrupt_list_.size();
@@ -2748,7 +2929,21 @@ public:
      */
     PS::S32 finishIntegrateInterruptClustersOMP() {
         PS::S32 n_interrupt = interrupt_list_.size();
+#ifdef HARD_PARALLEL
+// Same reasoning as in driveForMultiClusterOMP: one accumulator slot per
+// interrupted cluster, summed in list order afterwards.
+#ifdef PROFILE
+        std::vector<PS::S64> arc_substep_int(n_interrupt, 0);
+        std::vector<PS::S64> arc_tsyn_int(n_interrupt, 0);
+        std::vector<PS::S64> h4_step_int(n_interrupt, 0);
+#endif
+#ifdef HARD_CHECK_ENERGY
+        std::vector<HardEnergy> energy_int(n_interrupt);
+#endif
+#pragma omp parallel for schedule(dynamic,1)
+#else
 #pragma omp parallel for schedule(dynamic)
+#endif // HARD_PARALLEL
         for (PS::S32 i=0; i<n_interrupt; i++) {
             auto hard_int_ptr = interrupt_list_[i];
             auto& interrupt_binary = hard_int_ptr->integrateToTime(interrupt_dt_);
@@ -2757,22 +2952,64 @@ public:
                 hard_int_ptr->driftClusterCMRecordGroupCMDataAndWriteBack(interrupt_dt_);
 
 #ifdef PROFILE
+#ifdef HARD_PARALLEL
+                arc_substep_int[i] = hard_int_ptr->ARC_substep_sum;
+                arc_tsyn_int[i]    = hard_int_ptr->ARC_tsyn_step_sum;
+                h4_step_int[i]     = hard_int_ptr->H4_step_sum;
+#else
                 ARC_substep_sum    += hard_int_ptr->ARC_substep_sum;
                 ARC_tsyn_step_sum  += hard_int_ptr->ARC_tsyn_step_sum;
                 H4_step_sum        += hard_int_ptr->H4_step_sum;
+#endif // HARD_PARALLEL
 #endif
 #ifdef HARD_CHECK_ENERGY
+#ifdef HARD_PARALLEL
+                energy_int[i] = hard_int_ptr->energy;
+#else
                 // Multiple cluster workers share this accumulator.
 #pragma omp critical(petar_hard_energy_accumulate)
                 {
                     energy += hard_int_ptr->energy;
                 }
+#endif // HARD_PARALLEL
 #endif
                 
                 hard_int_ptr->clear();
             }
         }
+#ifdef HARD_PARALLEL
+
+#ifdef PROFILE
+        for (PS::S32 i=0; i<n_interrupt; i++) {
+            ARC_substep_sum   += arc_substep_int[i];
+            ARC_tsyn_step_sum += arc_tsyn_int[i];
+            H4_step_sum       += h4_step_int[i];
+        }
+#endif
+#ifdef HARD_CHECK_ENERGY
+        for (PS::S32 i=0; i<n_interrupt; i++) energy += energy_int[i];
+#endif
+#endif // HARD_PARALLEL
         
+#ifdef HARD_PARALLEL
+        // Drop the clusters that finished, keeping the order of the survivors.
+        // (The old swap-with-the-tail compaction reordered the list, so the
+        // order of the remaining interrupts depended on which one finished
+        // first.)
+        PS::S32 i_keep = 0;
+        for (PS::S32 i=0; i<n_interrupt; i++) {
+            HardIntegrator* hard_int_ptr = interrupt_list_[i];
+            if (hard_int_ptr->interrupt_binary.status!=AR::InterruptStatus::none) {
+                assert(hard_int_ptr->is_initialized);
+#ifdef HARD_INTERRUPT_PRINT
+                hard_int_ptr->printInterruptBinaryInfo(std::cerr);
+#endif
+                if (i_keep!=i) interrupt_list_[i_keep] = hard_int_ptr;
+                i_keep++;
+            }
+        }
+        if (i_keep<n_interrupt) interrupt_list_.decreaseSize(n_interrupt-i_keep);
+#else
         // record new interrupt list
         PS::S32 i_front = 0;
         PS::S32 i_end = n_interrupt;
@@ -2790,6 +3027,7 @@ public:
                 interrupt_list_.decreaseSize(1);
             }
         }
+#endif // HARD_PARALLEL
 
         n_interrupt =  interrupt_list_.size();
 
@@ -3550,7 +3788,17 @@ public:
             correctForceWithCutoffArtificialOneClusterImp(_sys, ptcl_hard_.getPointer(), adr_real_start, adr_real_end, n_group, adr_first_ptcl_arti, _acorr_flag);
 
             // obtain correction for real particles in clusters
+#ifdef HARD_PARALLEL
+            // The j loop is O(N^2) per cluster and used to run on one
+            // thread even when the cluster held hundreds of particles.  Each
+            // j writes only _sys[adr] for its own adr, every k is read, and
+            // the summation order inside one j is untouched, so the result is
+            // independent of the task schedule.
+            const int n_j = adr_real_end - adr_real_start;
+            auto correctOneReal = [&](const int j) {
+#else
             for (int j=adr_real_start; j<adr_real_end; j++) {
+#endif // HARD_PARALLEL
                 PS::S64 adr = ptcl_local[j].adr_org;
 #ifdef HARD_DEBUG
                 assert(_sys[adr].id==ptcl_local[j].id);
@@ -3599,6 +3847,15 @@ public:
 //                // correct soft potential energy of one particle change due to mass change
 //                correctSoftPotMassChangeOneParticle(_sys[adr]);
 //#endif
+#ifdef HARD_PARALLEL
+            };
+            if (InnerPar::useTask(n_j, 4)) {
+#pragma omp taskloop num_tasks(InnerPar::taskCount(n_j))
+                for (int jj=0; jj<n_j; jj++) correctOneReal(adr_real_start+jj);
+            }
+            else {
+                for (int jj=0; jj<n_j; jj++) correctOneReal(adr_real_start+jj);
+#endif // HARD_PARALLEL
             }
         }
     }

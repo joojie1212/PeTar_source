@@ -1286,7 +1286,11 @@ namespace ParticleSimulator{
 
         if(n_ipg > 0){
 #ifdef PARTICLE_SIMULATOR_THREAD_PARALLEL
+#ifdef HARD_PARALLEL
+#pragma omp parallel for schedule(dynamic, 1) reduction(+ : ni_tmp, nj_tmp, n_interaction_ep_ep_tmp, walk_time, dispatch_time)
+#else
 #pragma omp parallel for schedule(dynamic, 4) reduction(+ : ni_tmp, nj_tmp, n_interaction_ep_ep_tmp, walk_time, dispatch_time)
+#endif // HARD_PARALLEL
 #endif
             for(S32 i=0; i<n_ipg; i++){
                 const F64 offset_walk_tree = GetWtime();
@@ -1514,7 +1518,11 @@ namespace ParticleSimulator{
             for(S32 i=1; i<Comm::getNumberOfThread(); i++) n_cell_open_[0] += n_cell_open_[i];
 #else
 #ifdef PARTICLE_SIMULATOR_THREAD_PARALLEL
+#ifdef HARD_PARALLEL
+#pragma omp parallel for schedule(dynamic, 1) reduction(+ : ni_tmp, nj_tmp, n_interaction_ep_ep_tmp, n_interaction_ep_sp_tmp)
+#else
 #pragma omp parallel for schedule(dynamic, 4) reduction(+ : ni_tmp, nj_tmp, n_interaction_ep_ep_tmp, n_interaction_ep_sp_tmp)
+#endif // HARD_PARALLEL
 #endif
             for(S32 i=0; i<n_ipg; i++){
                 //std::cerr<<"i= "<<i<<" n_ipg= "<<n_ipg<<std::endl;
