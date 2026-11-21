@@ -2178,6 +2178,29 @@ namespace AR {
             updateSlowDownAndCorrectEnergy(true, true);
 #endif
 
+            // The host integrator estimates the step of this interval before
+            // calling this routine, from the slow-down state left by the
+            // previous interval; the update above refreshes that state.  The
+            // Kepler estimate depends on it (the nested slow-down factors set
+            // which binary is limiting, and the perturbation ratio scales its
+            // step), so re-estimate here to keep the first trial consistent
+            // with the slow-down factors it will actually use.
+            {
+                auto& bin_now = info.getBinaryTreeRoot();
+                const Float ds_kepler_now = info.calcDsKeplerBinaryTree(
+                        bin_now, manager->step.getOrder(),
+                        manager->interaction.gravitational_constant, manager->ds_scale);
+                if (ds_kepler_now>0.0 && ds_kepler_now<0.5*info.ds) {
+#ifdef AR_DEBUG_PRINT
+                    std::cerr<<"Resynchronize AR step estimate at interval entry:"
+                             <<" old ds="<<info.ds<<" new ds="<<ds_kepler_now<<std::endl;
+#endif
+                    info.ds = ds_kepler_now;
+                    ds[ds_switch] = info.ds;
+                    ds[1-ds_switch] = info.ds;
+                    ds_init = info.ds;
+                }
+            }
 
             // reset binary stab_check_time
             for (int i=0; i<info.binarytree.getSize(); i++)
