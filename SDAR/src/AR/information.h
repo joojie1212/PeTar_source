@@ -172,6 +172,34 @@ namespace AR {
             }
         }
 
+        //! smallest Kepler step among the binaries near-tied with the minimum
+        /*! calcDsMinKeplerIter returns the step of the binary that minimizes
+            ds/ebin.  That selection is discrete: two binaries with practically
+            equal ds/ebin can have steps that differ by orders of magnitude, and
+            which one wins flips on sub-percent changes of the perturbation
+            ratio.  This pass collects the candidates within a small factor of
+            the minimum and keeps the smallest step (the safe direction).
+            @param[out] _ds_min_tie: smallest dsi*scale among the near ties
+            @param[in] _ds_over_thr: near-tie threshold for ds/ebin
+         */
+        void calcDsTieMinIter(Float& _ds_min_tie, const Float& _ds_over_thr,
+                              const Float& _G, const Float& _nest_sd_up,
+                              BinaryTree<Tparticle>& _bin, const int _intergrator_order) {
+            const Float nest_sd = _nest_sd_up * _bin.slowdown.getSlowDownFactor();
+            const Float pert_ratio = (_bin.slowdown.pert_out>0&&_bin.slowdown.pert_in>0)? _bin.slowdown.pert_in/_bin.slowdown.pert_out: 1.0;
+            const Float scale_factor = std::min(Float(1.0),pow(1e-1*pert_ratio,1.0/Float(_intergrator_order)));
+            for (int k=0; k<2; k++) {
+                if (_bin.isMemberTree(k))
+                    calcDsTieMinIter(_ds_min_tie, _ds_over_thr, _G, nest_sd, *_bin.getMemberAsTree(k), _intergrator_order);
+            }
+            if (_bin.m1>0&&_bin.m2>0 && _bin.semi>0) {
+                const Float dsi = calcDsElliptic(_bin, _G)*scale_factor;
+                const Float ebin_sd = _G*(_bin.m1*_bin.m2)/(2*_bin.semi*nest_sd);
+                ASSERT(ebin_sd>0);
+                if (dsi/ebin_sd<=_ds_over_thr && dsi<_ds_min_tie) _ds_min_tie = dsi;
+            }
+        }
+
         //! calculate average kepler ds iterately for a binary tree
         /*! use calcDsMinKeplerIter
          */
@@ -181,6 +209,11 @@ namespace AR {
             Float ds_min_bin=NUMERIC_FLOAT_MAX;
             Float etot_sd = 0.0;
             calcDsMinKeplerIter(ds_over_ebin_min, ds_min_bin, ds_min_hyp, etot_sd, _G, 1.0, _bin, _int_order);
+            // Resolve near ties conservatively (see calcDsTieMinIter).
+            const Float ds_tie_eps = 1.0e-2;
+            Float ds_min_tie = NUMERIC_FLOAT_MAX;
+            calcDsTieMinIter(ds_min_tie, (Float(1.0)+ds_tie_eps)*ds_over_ebin_min, _G, 1.0, _bin, _int_order);
+            if (ds_min_tie<ds_min_bin) ds_min_bin = ds_min_tie;
             //Float ds_min_bin = ds_over_ebin_min*etot_sd/(bin_root.getMemberN()-1);
             ASSERT(ds_min_hyp<NUMERIC_FLOAT_MAX||ds_min_bin<NUMERIC_FLOAT_MAX);
             return _ds_scale*std::min(ds_min_bin,ds_min_hyp);
