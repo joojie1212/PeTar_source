@@ -17,6 +17,13 @@ for slowdown in TREE ARRAY; do
         PeTar_new_version/test/bugfix/ar_step_estimate.cxx -o "$output/ar_step_estimate-$slowdown"
     timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/ar_step_estimate-$slowdown"
 done
+# Forced-merger eligibility and consumption must use the current particle orbit.
+g++ -std=c++17 "${san[@]}" -fopenmp -DAR_TTL -DAR_SLOWDOWN_TREE \
+    -DAR_SLOWDOWN_TIMESCALE -DHARD_CHECK_ENERGY -DSTELLAR_EVOLUTION \
+    -DBSE_BASE -DBSEBBF "${inc[@]}" \
+    PeTar_new_version/test/bugfix/forced_merger.cxx \
+    PeTar_new_version/bse-interface/libbse.a -lgfortran -o "$output/forced_merger"
+timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/forced_merger"
 # Exercise both full internal gravity and directional changeover tie handling.
 for cutoff in off on; do
     cutoff_flags=()

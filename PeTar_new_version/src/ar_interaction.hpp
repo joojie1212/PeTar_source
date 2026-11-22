@@ -1126,7 +1126,7 @@ public:
         Peters inspiral time is shorter than a few hard steps, i.e. when the AR
         cannot resolve the remaining inspiral. */
     bool tryForcedMerger(const PtclHard& p1, const PtclHard& p2,
-                         const COMM::Binary& bin,
+                         COMM::Binary& bin,
                          const Float dt_remaining,
                          AR::InterruptBinary<PtclHard>& out) const {
         // The merge path is a no-op when stellar evolution is switched off
@@ -1136,12 +1136,18 @@ public:
         if (p1.star.kw!=14 || p2.star.kw!=14) return false;
         // never force a second merger on a remnant produced in this same AR call
         if (p1.dm>0.0 || p2.dm>0.0) return false;
-        const Float a = bin.semi;
-        const Float e = bin.ecc;
-        if (!(a>0.0) || !(e>=0.0 && e<1.0)) return false;
         const Float m1 = p1.mass;
         const Float m2 = p2.mass;
         if (!(m1>0.0 && m2>0.0)) return false;
+
+        // An accepted AR step does not synchronize the cached binary orbit.
+        // Refresh from its current particles before both eligibility checks and
+        // the caller's smallest-semi selection. Cheap non-candidate guards above
+        // avoid this work for disabled stellar evolution and non-BH pairs.
+        bin.calcOrbit(p1, p2, gravitational_constant);
+        const Float a = bin.semi;
+        const Float e = bin.ecc;
+        if (!(a>0.0) || !(e>=0.0 && e<1.0)) return false;
 
         const Float c = bse_manager.getSpeedOfLight();
         const Float rp = a*(1.0-e);
@@ -2010,14 +2016,29 @@ public:
                 };
 
 #if defined(BSE_BASE) && defined(STELLAR_EVOLUTION)
+                bool forced_valid = false;
                 if (forced_requested) {
-                    if (stellar_evolution_option<=0) {
-                        // No stellar evolution: merge() is a no-op.  Drop the
-                        // request instead of reporting a merger that did not
-                        // happen.
-                        _bin_interrupt.clear();
-                        return 0;
+                    // BSE above may have changed the particles since selection.
+                    // Recompute the orbit and revalidate immediately before merge.
+                    AR::InterruptBinary<PtclHard> probe;
+                    forced_valid = tryForcedMerger(*p1, *p2, _bin,
+                        _bin_interrupt.time_end-_bin_interrupt.time_now, probe);
+                    if (forced_valid) {
+                        _bin_interrupt.theoretical_merger_time =
+                            _bin_interrupt.time_now+probe.theoretical_merger_time;
                     }
+                    else {
+                        // Cancel only the rescue request. Preserve the clock and
+                        // any stellar changes, then run ordinary collision checks.
+                        _bin_interrupt.forced = false;
+                        _bin_interrupt.forced_id[0] = _bin_interrupt.forced_id[1] = -1;
+                        _bin_interrupt.theoretical_merger_time = -1.0;
+                        if (_bin_interrupt.status == AR::InterruptStatus::forced_merge)
+                            _bin_interrupt.status = modify_return>0
+                                ? AR::InterruptStatus::change : AR::InterruptStatus::none;
+                    }
+                }
+                if (forced_valid) {
                     std::cerr << "FORCED_MERGER now=" << _bin_interrupt.time_now
                               << " peters=" << _bin_interrupt.theoretical_merger_time
                               << " id1=" << p1->id << " id2=" << p2->id
