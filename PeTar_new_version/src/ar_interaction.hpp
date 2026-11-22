@@ -1104,6 +1104,70 @@ public:
         return 0;
     }
 
+    //! Peters (1964) inspiral time of a bound compact pair [pc, Msun, Myr].
+    /*! Uses the closed-form eccentricity factor tabulated in
+        PetersMergerTime::eccentricityFactor(). */
+    Float petersMergerLifetime(const Float a, const Float e,
+                               const Float m1, const Float m2) const {
+        const Float c = bse_manager.getSpeedOfLight();
+        const Float f = PetersMergerTime::eccentricityFactor(e);
+        return (5.0/256.0)*std::pow(c,5)*std::pow(a,4)
+            /(std::pow(gravitational_constant,3)*m1*m2*(m1+m2))*f;
+    }
+
+    //! Step-limit forced merger candidate (compact BH-BH pair).
+    /*! Called by the AR integrator at an accepted step boundary when the group
+        has exhausted its step budget.  The request is only recorded here; the
+        merge itself runs through the ordinary merge() path (remnant fitting,
+        mass loss, kick, spin and dm bookkeeping are shared with a dynamical
+        merger).  A pair is eligible when its pericentre is already inside the
+        relativistic regime (1000 Schwarzschild radii, or v_p > 0.1c) and its
+        Peters inspiral time is shorter than a few hard steps, i.e. when the AR
+        cannot resolve the remaining inspiral. */
+    bool tryForcedMerger(const PtclHard& p1, const PtclHard& p2,
+                         const COMM::Binary& bin,
+                         const Float now, const Float time_end,
+                         AR::InterruptBinary<PtclHard>& out) const {
+        if (p1.star.kw!=14 || p2.star.kw!=14) return false;
+        // never force a second merger on a remnant produced in this same AR call
+        if (p1.dm>0.0 || p2.dm>0.0) return false;
+        const Float a = bin.semi;
+        const Float e = bin.ecc;
+        if (!(a>0.0) || !(e>=0.0 && e<1.0)) return false;
+        const Float m1 = p1.mass;
+        const Float m2 = p2.mass;
+        if (!(m1>0.0 && m2>0.0)) return false;
+
+        const Float c = bse_manager.getSpeedOfLight();
+        const Float rp = a*(1.0-e);
+        const Float vp = std::sqrt(gravitational_constant*(m1+m2)*(1.0+e)/(a*(1.0-e)));
+        const Float r_close = 1000.0*2.0*gravitational_constant*(m1+m2)/(c*c);
+        if (!(rp<r_close || vp>0.1*c)) return false;
+
+        const Float lifetime = petersMergerLifetime(a,e,m1,m2);
+        if (!(std::isfinite(lifetime))) return false;
+        // Merge only when the pair coalesces within a few hard steps.  The
+        // floor keeps the criterion meaningful when the remaining interval is
+        // much shorter than the hard/output window; the resulting timing error
+        // is at most ~10x the floor.
+        const Float dt_window = std::max(time_end-now, (Float)1.0e-4);
+        if (!(lifetime < 10.0*dt_window)) return false;
+
+        out.forced = true;
+        out.status = AR::InterruptStatus::forced_merge;
+        out.forced_id[0] = p1.id;
+        out.forced_id[1] = p2.id;
+        out.theoretical_merger_time = now + lifetime;
+        out.time_now = now;
+        out.time_end = time_end;
+        return true;
+    }
+
+    template<class T>
+    bool tryForcedMerger(const T&, const T&, const COMM::Binary&,
+                         const Float, const Float,
+                         AR::InterruptBinary<T>&) const { return false; }
+
     //! (Necessary) modify the orbits and interrupt check
     /*! check the inner left binary whether their separation is smaller than particle radius sum and become close, if true, set one component stauts to merger with cm mass and the other unused with zero mass. Return the binary tree address
       @param[in] _bin_interrupt: interrupt binary information: adr: binary tree address; time_now: current physical time; time_end: integration finishing time; status: interrupt status: change, merge,none
@@ -1149,6 +1213,15 @@ public:
         else {
             auto* p1 = _bin.getLeftMember();
             auto* p2 = _bin.getRightMember();
+            // A pending step-limit forced merger is consumed only by the leaf
+            // that carries the requested pair; all other leaves follow the
+            // ordinary interrupt logic.
+            const bool forced_requested =
+                (_bin_interrupt.status == AR::InterruptStatus::forced_merge
+                 && ((p1->id == _bin_interrupt.forced_id[0]
+                      && p2->id == _bin_interrupt.forced_id[1])
+                     || (p1->id == _bin_interrupt.forced_id[1]
+                         && p2->id == _bin_interrupt.forced_id[0])));
 
             COMM::Vector3<Float> pos_red(p2->pos[0] - p1->pos[0], p2->pos[1] - p1->pos[1], p2->pos[2] - p1->pos[2]);
             COMM::Vector3<Float> vel_red(p2->vel[0] - p1->vel[0], p2->vel[1] - p1->vel[1], p2->vel[2] - p1->vel[2]);
@@ -1926,6 +1999,25 @@ public:
                     //p2->setBinaryPairID(0);
 
                 };
+
+                if (forced_requested) {
+                    std::cerr << "FORCED_MERGER now=" << _bin_interrupt.time_now
+                              << " peters=" << _bin_interrupt.theoretical_merger_time
+                              << " id1=" << p1->id << " id2=" << p2->id
+                              << " semi=" << _bin.semi << " ecc=" << _bin.ecc << std::endl;
+                    // Merge through the ordinary path; the state here is an
+                    // accepted AR step boundary and the AR loop keeps
+                    // integrating the survivors to the end of the step.
+                    Float dr_forced = 0.0;
+                    for (int k=0; k<3; k++) {
+                        const Float dk = p1->pos[k] - p2->pos[k];
+                        dr_forced += dk*dk;
+                    }
+                    merge(std::sqrt(dr_forced), 0.0, 1.0);
+                    _bin_interrupt.status = AR::InterruptStatus::merge;
+                    _bin_interrupt.forced = true;
+                    return 2;
+                }
 
                 // BSE may have changed masses, positions and velocities. Collision
                 // and tide decisions must use the same instantaneous orbit.
