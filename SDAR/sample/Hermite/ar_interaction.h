@@ -16,6 +16,15 @@ public:
 
     ARInteraction(): eps_sq(Float(-1.0)), gravitational_constant(Float(-1.0)) {}
 
+
+    //! Fallback for interaction classes without a forced-merger implementation
+    /*! The AR integrator asks for a step-limit forced-merger candidate at an
+        accepted step boundary; interactions that do not support it return
+        false here and the AR keeps its ordinary interrupt logic. */
+    template<class T>
+    bool tryForcedMerger(const T&, const T&, const COMM::Binary&,
+                         const Float, AR::InterruptBinary<T>&) const { return false; }
+
     //! (Necessary) check whether publicly initialized parameters are correctly set
     /*! \return true: all parmeters are correct. In this case no parameters, return true;
      */

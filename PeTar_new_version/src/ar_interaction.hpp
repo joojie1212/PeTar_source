@@ -1127,8 +1127,12 @@ public:
         cannot resolve the remaining inspiral. */
     bool tryForcedMerger(const PtclHard& p1, const PtclHard& p2,
                          const COMM::Binary& bin,
-                         const Float now, const Float time_end,
+                         const Float dt_remaining,
                          AR::InterruptBinary<PtclHard>& out) const {
+        // The merge path is a no-op when stellar evolution is switched off
+        // (merge() only acts inside its stellar-evolution branch), so a request
+        // would report a merger that never happened.
+        if (stellar_evolution_option<=0) return false;
         if (p1.star.kw!=14 || p2.star.kw!=14) return false;
         // never force a second merger on a remnant produced in this same AR call
         if (p1.dm>0.0 || p2.dm>0.0) return false;
@@ -1148,19 +1152,19 @@ public:
         const Float lifetime = petersMergerLifetime(a,e,m1,m2);
         if (!(std::isfinite(lifetime))) return false;
         // Merge only when the pair coalesces within a few hard steps.  The
-        // floor keeps the criterion meaningful when the remaining interval is
-        // much shorter than the hard/output window; the resulting timing error
-        // is at most ~10x the floor.
-        const Float dt_window = std::max(time_end-now, (Float)1.0e-4);
+        // remaining interval is passed as a single (local) duration so the
+        // criterion cannot mix global and local time coordinates.  The floor
+        // keeps it meaningful when the interval is much shorter than the
+        // hard/output window; the resulting timing error is at most ~10x the
+        // floor.
+        const Float dt_window = std::max(dt_remaining, (Float)1.0e-4);
         if (!(lifetime < 10.0*dt_window)) return false;
 
         out.forced = true;
         out.status = AR::InterruptStatus::forced_merge;
         out.forced_id[0] = p1.id;
         out.forced_id[1] = p2.id;
-        out.theoretical_merger_time = now + lifetime;
-        out.time_now = now;
-        out.time_end = time_end;
+        out.theoretical_merger_time = lifetime;
         return true;
     }
 
@@ -1169,8 +1173,7 @@ public:
     // Fallback for builds without BSE stellar evolution: no forced merger.
     template<class T>
     bool tryForcedMerger(const T&, const T&, const COMM::Binary&,
-                         const Float, const Float,
-                         AR::InterruptBinary<T>&) const { return false; }
+                         const Float, AR::InterruptBinary<T>&) const { return false; }
 
     //! (Necessary) modify the orbits and interrupt check
     /*! check the inner left binary whether their separation is smaller than particle radius sum and become close, if true, set one component stauts to merger with cm mass and the other unused with zero mass. Return the binary tree address
@@ -1219,13 +1222,15 @@ public:
             auto* p2 = _bin.getRightMember();
             // A pending step-limit forced merger is consumed only by the leaf
             // that carries the requested pair; all other leaves follow the
-            // ordinary interrupt logic.
+            // ordinary interrupt logic.  Requests only exist in BSE builds.
+#if defined(BSE_BASE) && defined(STELLAR_EVOLUTION)
             const bool forced_requested =
                 (_bin_interrupt.status == AR::InterruptStatus::forced_merge
                  && ((p1->id == _bin_interrupt.forced_id[0]
                       && p2->id == _bin_interrupt.forced_id[1])
                      || (p1->id == _bin_interrupt.forced_id[1]
                          && p2->id == _bin_interrupt.forced_id[0])));
+#endif
 
             COMM::Vector3<Float> pos_red(p2->pos[0] - p1->pos[0], p2->pos[1] - p1->pos[1], p2->pos[2] - p1->pos[2]);
             COMM::Vector3<Float> vel_red(p2->vel[0] - p1->vel[0], p2->vel[1] - p1->vel[1], p2->vel[2] - p1->vel[2]);
@@ -2004,7 +2009,15 @@ public:
 
                 };
 
+#if defined(BSE_BASE) && defined(STELLAR_EVOLUTION)
                 if (forced_requested) {
+                    if (stellar_evolution_option<=0) {
+                        // No stellar evolution: merge() is a no-op.  Drop the
+                        // request instead of reporting a merger that did not
+                        // happen.
+                        _bin_interrupt.clear();
+                        return 0;
+                    }
                     std::cerr << "FORCED_MERGER now=" << _bin_interrupt.time_now
                               << " peters=" << _bin_interrupt.theoretical_merger_time
                               << " id1=" << p1->id << " id2=" << p2->id
@@ -2018,10 +2031,17 @@ public:
                         dr_forced += dk*dk;
                     }
                     merge(std::sqrt(dr_forced), 0.0, 1.0);
+                    if (p1->mass>0.0 && p2->mass>0.0) {
+                        // merge() did not actually coalesce the pair; do not
+                        // report a merger.
+                        _bin_interrupt.clear();
+                        return 0;
+                    }
                     _bin_interrupt.status = AR::InterruptStatus::merge;
                     _bin_interrupt.forced = true;
                     return 2;
                 }
+#endif // BSE_BASE && STELLAR_EVOLUTION
 
                 // BSE may have changed masses, positions and velocities. Collision
                 // and tide decisions must use the same instantaneous orbit.

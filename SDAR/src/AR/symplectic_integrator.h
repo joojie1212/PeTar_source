@@ -2251,7 +2251,7 @@ namespace AR {
                             probe.clear();
                             if (!manager->interaction.tryForcedMerger(
                                     particles[i1], particles[i2], bin_try,
-                                    time_ + info.time_offset, _time_end, probe)) continue;
+                                    _time_end - time_, probe)) continue;
                             if (bin_try.semi < forced_semi_best) {
                                 forced_semi_best = bin_try.semi;
                                 forced_bin_best = ibin;
@@ -2264,10 +2264,16 @@ namespace AR {
                             bin_interrupt.clear();
                             manager->interaction.tryForcedMerger(
                                     particles[i1], particles[i2], bin_try,
-                                    time_ + info.time_offset, _time_end, bin_interrupt);
+                                    _time_end - time_, bin_interrupt);
                             bin_interrupt.adr = &bin_root;
+                            // Global coordinates for the interrupt record; the
+                            // eligibility criterion above used the local
+                            // remaining interval only.
                             bin_interrupt.time_now = time_ + info.time_offset;
                             bin_interrupt.time_end = _time_end + info.time_offset;
+                            // theoretical_merger_time is a duration; convert it
+                            // to the global merger time for diagnostics.
+                            bin_interrupt.theoretical_merger_time += bin_interrupt.time_now;
                             forced_merger_triggered = true;
                             std::cerr << "FORCED_REQUEST t_ar=" << time_
                                       << " t_global=" << bin_interrupt.time_now
@@ -2275,8 +2281,11 @@ namespace AR {
                                       << " id1=" << particles[i1].id
                                       << " id2=" << particles[i2].id
                                       << " semi=" << bin_try.semi
-                                      << " ecc=" << bin_try.ecc
-                                      << " ar_dE_sd=" << getEnergyErrorSlowDown() << std::endl;
+                                      << " ecc=" << bin_try.ecc;
+#if (defined AR_SLOWDOWN_ARRAY) || (defined AR_SLOWDOWN_TREE)
+                            std::cerr << " ar_dE_sd=" << getEnergyErrorSlowDown();
+#endif
+                            std::cerr << std::endl;
                         }
                     }
                     // check interrupt condiction, ensure that time end not reach
