@@ -261,6 +261,11 @@ int main(int argc, char **argv){
   }
 
   std::cerr<<"Time end: "<<hard_dump.time_end<<std::endl;
+  // The replay driver integrates one dump, so the stellar-evolution interrupt
+  // time must be the dump's end time (the production driver sets it from the
+  // run parameters).
+  hard_manager.ar_manager.interaction.time_interrupt_max =
+      hard_dump.time_offset + hard_dump.time_end;
 
 #ifdef SOFT_PERT
   if (!soft_pert_flag) {
