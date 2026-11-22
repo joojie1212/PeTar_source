@@ -1104,6 +1104,7 @@ public:
         return 0;
     }
 
+#if defined(BSE_BASE) && defined(STELLAR_EVOLUTION)
     //! Peters (1964) inspiral time of a bound compact pair [pc, Msun, Myr].
     /*! Uses the closed-form eccentricity factor tabulated in
         PetersMergerTime::eccentricityFactor(). */
@@ -1163,6 +1164,9 @@ public:
         return true;
     }
 
+#endif // BSE_BASE && STELLAR_EVOLUTION
+
+    // Fallback for builds without BSE stellar evolution: no forced merger.
     template<class T>
     bool tryForcedMerger(const T&, const T&, const COMM::Binary&,
                          const Float, const Float,
