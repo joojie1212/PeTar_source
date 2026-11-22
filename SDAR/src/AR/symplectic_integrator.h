@@ -2043,6 +2043,7 @@ namespace AR {
             Float backup_data_init[bk_data_size]; // for backup initial data
 #endif
             bool backup_flag=true; // flag for backup or restore
+            bool forced_merger_triggered=false; // at most one request per AR call
 
             // time table
             const int cd_pair_size = manager->step.getCDPairSize();
@@ -2215,8 +2216,82 @@ namespace AR {
                 auto& G = manager->interaction.gravitational_constant;
                 
                 if(backup_flag) {
+                    // Step-limit forced merger.  This block runs only when
+                    // backup_flag==true, i.e. on a state produced by an
+                    // accepted step (or the initial state), never on a trial
+                    // that the error control may still reject.  The merge is
+                    // performed by modifyAndInterruptIter()/merge() below and
+                    // the AR loop then integrates the survivors to _time_end
+                    // like on the ordinary merger path.
+#ifdef FORCED_MERGER_EARLY_GATE
+                    // Alternative policy: act on the first accepted boundary
+                    // once the timescale criterion holds.  This merges earlier
+                    // and can pick a different pair than the one that would
+                    // stall; it is not an energy fix, it only avoids letting
+                    // the AR accumulate error on the unresolvable orbit.
+                    const bool forced_due = (step_count>=1);
+#else
+                    // Default: stall rescue.  Only act after the AR has hit
+                    // the step limit, i.e. on the pair that actually stalls.
+                    const bool forced_due = (step_count>=manager->step_count_max);
+#endif
+                    if (!forced_merger_triggered && forced_due
+                        && bin_interrupt.status==InterruptStatus::none) {
+                        // Among the eligible leaves pick the tightest pair
+                        // (smallest semi), i.e. the orbit the AR can least
+                        // resolve.
+                        int forced_bin_best = -1;
+                        Float forced_semi_best = NUMERIC_FLOAT_MAX;
+                        AR::InterruptBinary<Tparticle> probe = bin_interrupt;
+                        for (int ibin=0; ibin<info.binarytree.getSize(); ibin++) {
+                            auto& bin_try = info.binarytree[ibin];
+                            const int i1 = bin_try.getMemberIndex(0);
+                            const int i2 = bin_try.getMemberIndex(1);
+                            if (i1<0 || i2<0) continue;
+                            probe.clear();
+                            if (!manager->interaction.tryForcedMerger(
+                                    particles[i1], particles[i2], bin_try,
+                                    _time_end - time_, probe)) continue;
+                            if (bin_try.semi < forced_semi_best) {
+                                forced_semi_best = bin_try.semi;
+                                forced_bin_best = ibin;
+                            }
+                        }
+                        if (forced_bin_best>=0) {
+                            auto& bin_try = info.binarytree[forced_bin_best];
+                            const int i1 = bin_try.getMemberIndex(0);
+                            const int i2 = bin_try.getMemberIndex(1);
+                            bin_interrupt.clear();
+                            manager->interaction.tryForcedMerger(
+                                    particles[i1], particles[i2], bin_try,
+                                    _time_end - time_, bin_interrupt);
+                            bin_interrupt.adr = &bin_root;
+                            // Global coordinates for the interrupt record; the
+                            // eligibility criterion above used the local
+                            // remaining interval only.
+                            bin_interrupt.time_now = time_ + info.time_offset;
+                            bin_interrupt.time_end = _time_end + info.time_offset;
+                            // theoretical_merger_time is a duration; convert it
+                            // to the global merger time for diagnostics.
+                            bin_interrupt.theoretical_merger_time += bin_interrupt.time_now;
+                            forced_merger_triggered = true;
+                            std::cerr << "FORCED_REQUEST t_ar=" << time_
+                                      << " t_global=" << bin_interrupt.time_now
+                                      << " step=" << step_count
+                                      << " id1=" << particles[i1].id
+                                      << " id2=" << particles[i2].id
+                                      << " semi=" << bin_try.semi
+                                      << " ecc=" << bin_try.ecc;
+#if (defined AR_SLOWDOWN_ARRAY) || (defined AR_SLOWDOWN_TREE)
+                            std::cerr << " ar_dE_sd=" << getEnergyErrorSlowDown();
+#endif
+                            std::cerr << std::endl;
+                        }
+                    }
                     // check interrupt condiction, ensure that time end not reach
-                    if (manager->interrupt_detection_option>0 && !time_end_flag) {
+                    if (manager->interrupt_detection_option>0
+                        && (!time_end_flag
+                            || bin_interrupt.status==InterruptStatus::forced_merge)) {
                         bin_interrupt.time_now = time_ + info.time_offset;
                         bin_interrupt.time_end = _time_end + info.time_offset;
                         // calc perturbation energy
@@ -2428,7 +2503,26 @@ namespace AR {
                                 info.ds = info.calcDsKeplerBinaryTree(*bin_interrupt.adr, manager->step.getOrder(), G, manager->ds_scale);
                                 Float ds_max = manager->step.calcStepModifyFactorFromErrorRatio(2.0)*ds_init;
                                 Float ds_min = manager->step.calcStepModifyFactorFromErrorRatio(0.5)*ds_init;
-                                if (info.ds>ds_max || info.ds<ds_min) {
+                                if (bin_interrupt.forced
+                                    && bin_interrupt.status==InterruptStatus::merge
+                                    && info.ds>0.0) {
+                                    // The forced merger removed the innermost
+                                    // (stalled) binary; the step size inherited
+                                    // from it describes a system that no longer
+                                    // exists.  Re-initialize the step control
+                                    // from the new tree's Kepler estimate so the
+                                    // survivors are integrated to the end of the
+                                    // step instead of crawling with the merged
+                                    // binary's ds.
+                                    std::cerr << "FORCED_DS_RESET old_ds=" << ds[0]
+                                              << " old_ds_init=" << ds_init
+                                              << " new_ds=" << info.ds << std::endl;
+                                    ds[0] = info.ds;
+                                    ds[1] = info.ds;
+                                    ds_backup.initial(info.ds);
+                                    ds_init = info.ds;
+                                }
+                                else if (info.ds>ds_max || info.ds<ds_min) {
 #ifdef AR_DEBUG_PRINT
                                     std::cerr<<"Change ds after interruption: ds(init): "<<ds_init<<" ds(new): "<<info.ds<<" ds(now): "<<ds[0]<<std::endl;
 #endif
