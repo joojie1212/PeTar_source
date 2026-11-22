@@ -2184,8 +2184,9 @@ namespace AR {
             // Kepler estimate depends on it (the nested slow-down factors set
             // which binary is limiting, and the perturbation ratio scales its
             // step), so re-estimate here to keep the first trial consistent
-            // with the slow-down factors it will actually use.
-            {
+            // with the slow-down factors it will actually use. Preserve an
+            // explicitly requested fixed step.
+            if (info.fix_step_option!=FixStepOption::always) {
                 auto& bin_now = info.getBinaryTreeRoot();
                 const Float ds_kepler_now = info.calcDsKeplerBinaryTree(
                         bin_now, manager->step.getOrder(),

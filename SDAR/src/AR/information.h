@@ -210,10 +210,17 @@ namespace AR {
             Float etot_sd = 0.0;
             calcDsMinKeplerIter(ds_over_ebin_min, ds_min_bin, ds_min_hyp, etot_sd, _G, 1.0, _bin, _int_order);
             // Resolve near ties conservatively (see calcDsTieMinIter).
-            const Float ds_tie_eps = 1.0e-2;
-            Float ds_min_tie = NUMERIC_FLOAT_MAX;
-            calcDsTieMinIter(ds_min_tie, (Float(1.0)+ds_tie_eps)*ds_over_ebin_min, _G, 1.0, _bin, _int_order);
-            if (ds_min_tie<ds_min_bin) ds_min_bin = ds_min_tie;
+            // A purely hyperbolic tree leaves the elliptic minimum at the
+            // sentinel; multiplying it by the tie factor would overflow.
+            if (ds_over_ebin_min<NUMERIC_FLOAT_MAX) {
+                const Float ds_tie_eps = 1.0e-2;
+                Float ds_min_tie = NUMERIC_FLOAT_MAX;
+                const Float tie_factor = Float(1.0)+ds_tie_eps;
+                const Float ds_over_thr = ds_over_ebin_min<NUMERIC_FLOAT_MAX/tie_factor
+                    ? tie_factor*ds_over_ebin_min : NUMERIC_FLOAT_MAX;
+                calcDsTieMinIter(ds_min_tie, ds_over_thr, _G, 1.0, _bin, _int_order);
+                if (ds_min_tie<ds_min_bin) ds_min_bin = ds_min_tie;
+            }
             //Float ds_min_bin = ds_over_ebin_min*etot_sd/(bin_root.getMemberN()-1);
             ASSERT(ds_min_hyp<NUMERIC_FLOAT_MAX||ds_min_bin<NUMERIC_FLOAT_MAX);
             return _ds_scale*std::min(ds_min_bin,ds_min_hyp);

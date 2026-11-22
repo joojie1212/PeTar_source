@@ -10,6 +10,13 @@ g++ -std=c++17 "${san[@]}" -DINTEGRATED_CUTOFF_FUNCTION -DHARD_CHECK_ENERGY "${i
 # LeakSanitizer cannot enumerate processes inside the managed sandbox.
 # Set BUGFIX_DETECT_LEAKS=1 in an unrestricted environment for the leak check.
 timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/core"
+# Kepler near ties, hyperbolic sentinels, and explicit fixed-step policy.
+for slowdown in TREE ARRAY; do
+    g++ -std=c++17 "${san[@]}" -fopenmp -DAR_TTL -DHARD_CHECK_ENERGY \
+        -DAR_SLOWDOWN_"$slowdown" -DAR_SLOWDOWN_TIMESCALE "${inc[@]}" \
+        PeTar_new_version/test/bugfix/ar_step_estimate.cxx -o "$output/ar_step_estimate-$slowdown"
+    timeout 60s env ASAN_OPTIONS=detect_leaks=${BUGFIX_DETECT_LEAKS:-0} "$output/ar_step_estimate-$slowdown"
+done
 # Exercise both full internal gravity and directional changeover tie handling.
 for cutoff in off on; do
     cutoff_flags=()
